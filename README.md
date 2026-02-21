@@ -1,79 +1,3 @@
-<!-- ============== VARIANT 1 - Classic ============== -->
-<!--
-```
- ____  _   _ _     ____    _    ____
-|  _ \| | | | |   / ___|  / \  |  _ \
-| |_) | | | | |   \___ \ / _ \ | |_) |
-|  __/| |_| | |___ ___) / ___ \|  _ <
-|_|    \___/|_____|____/_/   \_\_| \_\
-
-Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 2 - Box with stars ============== -->
-<!--
-```
-╔═══════════════════════════════════════════════════════════════════╗
-║  ★  P U L S A R  ★                                                ║
-║  Portable Utility Library for Shell Astrophotography Routines    ║
-╚═══════════════════════════════════════════════════════════════════╝
-```
--->
-
-<!-- ============== VARIANT 3 - Minimalist ============== -->
-<!--
-```
-    ____  __  ____   ___   ___  ____
-   / __ \/ / / / /  / __\ / _ \/ __ \
-  / /_/ / /_/ / /__/\__ \/ /_\ / /_/ /
- / .___/\____/____/\___//_/ \_\____/
-/_/  Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 4 - Cosmic ============== -->
-<!--
-```
-       *  .  *       .       *    .        *   .
-    .    *       P U L S A R        .  *      .
-  *    .    *                   .        *
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Portable Utility Library for Shell Astrophotography Routines
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-       .    *    .        *   .      *     .
-```
--->
-
-<!-- ============== VARIANT 5 - Block (big) ============== -->
-<!--
-```
-██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
-██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
-██████╔╝██║   ██║██║     ███████╗███████║██████╔╝
-██╔═══╝ ██║   ██║██║     ╚════██║██╔══██║██╔══██╗
-██║     ╚██████╔╝███████╗███████║██║  ██║██║  ██║
-╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
-
-Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 6 - Classic with letter meanings ============== -->
-<!--
-```
- ____  _   _ _     ____    _    ____
-|  _ \| | | | |   / ___|  / \  |  _ \
-| |_) | | | | |   \___ \ / _ \ | |_) |
-|  __/| |_| | |___ ___) / ___ \|  _ <
-|_|    \___/|_____|____/_/   \_\_| \_\
-
-[P]ortable [U]tility [L]ibrary for [S]hell [A]strophotography [R]outines
-```
--->
-
-<!-- ============== CHOSEN VARIANT (uncomment one above and paste here) ============== -->
-
 ```
 ██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
 ██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
@@ -144,6 +68,7 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 - Time-based sorting with session splitting
 - Hot pixel list generation
 - Flat field gradient correction
+- More (to be documented)
 
 ---
 
@@ -293,6 +218,7 @@ PULSAR/
 ├── Autosolve/         # autosolve.py
 ├── FFT_Align/         # fft_align.py
 ├── Samples*/          # Test data
+├── SCRIPTS-english.md # Detailed documentation (English)
 ├── SCRIPTS.md         # Detailed documentation (Russian)
 ├── CLAUDE.md          # AI assistant instructions
 └── README.md          # This file
@@ -345,3 +271,4 @@ MIT License
 - [Siril](https://siril.org/) — free astronomical image processing
 - [PixInsight](https://pixinsight.com/) — professional processing platform
 - [Astrometry.net](http://astrometry.net/) — astrometric solving service
+
