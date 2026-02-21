@@ -1,0 +1,1 @@
+call Commands\setup.bat

@@ -1,0 +1,1 @@
+python asolve.py test0001.fit --rect-center-ra 12.8253 --rect-center-dec -25.7880 --rect-pixscale 1.65

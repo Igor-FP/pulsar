@@ -1,0 +1,1 @@
+python normalize.py test_cal_l_001.fit z.fit test_cal_l_001.fit 3

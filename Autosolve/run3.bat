@@ -1,0 +1,1 @@
+python asolve.py test0001.fit
