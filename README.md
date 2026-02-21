@@ -83,6 +83,7 @@ Portable Utility Library for Shell Astrophotography Routines
 ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
 ```
 ### **P**ortable **U**tility **L**ibrary for **S**hell **A**strophotography **R**outines
+
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows | Linux](https://img.shields.io/badge/platform-Windows%20|%20Linux-lightgrey.svg)]()
@@ -225,7 +226,7 @@ autosolve --rectify --align *.fit aligned\
 | **autosolve.py** | Astrometry and reprojection |
 | **fft_align.py** | FFT-based alignment |
 
-Full documentation: **[SCRIPTS.md](SCRIPTS.md)**
+Full documentation: **[SCRIPTS.md](SCRIPTS-english.md)** (English) | **[SCRIPTS.md](SCRIPTS.md)** (Russian)
 
 ---
 
@@ -344,4 +345,3 @@ MIT License
 - [Siril](https://siril.org/) — free astronomical image processing
 - [PixInsight](https://pixinsight.com/) — professional processing platform
 - [Astrometry.net](http://astrometry.net/) — astrometric solving service
-
