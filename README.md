@@ -220,7 +220,6 @@ PULSAR/
 ├── Samples*/          # Test data
 ├── SCRIPTS-english.md # Detailed documentation (English)
 ├── SCRIPTS.md         # Detailed documentation (Russian)
-├── CLAUDE.md          # AI assistant instructions
 └── README.md          # This file
 ```
 
@@ -271,4 +270,5 @@ MIT License
 - [Siril](https://siril.org/) — free astronomical image processing
 - [PixInsight](https://pixinsight.com/) — professional processing platform
 - [Astrometry.net](http://astrometry.net/) — astrometric solving service
+
 
