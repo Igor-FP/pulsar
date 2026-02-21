@@ -1,0 +1,1 @@
+python autocalibrate2.py raw\*.fit out\cal.fit dark\ flat\

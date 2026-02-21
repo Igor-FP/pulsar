@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AstroBatch - Документация</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h1>AstroBatch</h1>
+                <p>Пакетная обработка FITS</p>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Начало работы</div>
+                <ul>
+                    <li><a href="#overview">Обзор</a></li>
+                    <li><a href="#install">Установка</a></li>
+                    <li><a href="#formats">Форматы данных</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Арифметика</div>
+                <ul>
+                    <li><a href="#add">add.py</a></li>
+                    <li><a href="#sub">sub.py</a></li>
+                    <li><a href="#mul">mul.py</a></li>
+                    <li><a href="#div">div.py</a></li>
+                    <li><a href="#arith">arith.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Комбинирование</div>
+                <ul>
+                    <li><a href="#sum">sum.py</a></li>
+                    <li><a href="#med">med.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Калибровка</div>
+                <ul>
+                    <li><a href="#calibrate">calibrate.py</a></li>
+                    <li><a href="#autocalibrate">autocalibrate.py</a></li>
+                    <li><a href="#darkopt">darkopt.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Нормализация</div>
+                <ul>
+                    <li><a href="#normalize">normalize.py</a></li>
+                    <li><a href="#ngain">ngain.py</a></li>
+                    <li><a href="#noffset">noffset.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Мастер-кадры</div>
+                <ul>
+                    <li><a href="#makedark">makedark.py</a></li>
+                    <li><a href="#makeflat">makeflat.py</a></li>
+                    <li><a href="#newflat">newflat.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Коррекция</div>
+                <ul>
+                    <li><a href="#cosme">cosme.py</a></li>
+                    <li><a href="#make_cosme">make_cosme.py</a></li>
+                    <li><a href="#autoflat">autoflat.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Выравнивание</div>
+                <ul>
+                    <li><a href="#autosolve">autosolve.py</a></li>
+                    <li><a href="#fft_align">fft_align.py</a></li>
+                    <li><a href="#sortfits">sortfits.py</a></li>
+                </ul>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main">
+            <h1>AstroBatch</h1>
+            <p>Набор инструментов для пакетной обработки астрономических FITS-изображений. Поддерживает калибровку, арифметические операции, комбинирование и анализ данных CCD/CMOS съёмки.</p>
+
+            <!-- Overview -->
+            <section id="overview">
+                <h2>Краткий справочник</h2>
+
+                <table class="quick-ref">
+                    <thead>
+                        <tr>
+                            <th>Скрипт</th>
+                            <th>Назначение</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>add.py</td><td>Сложение: result = input + operand + offset</td></tr>
+                        <tr><td>sub.py</td><td>Вычитание: result = input - operand + offset</td></tr>
+                        <tr><td>mul.py</td><td>Умножение: result = input * operand * scale</td></tr>
+                        <tr><td>div.py</td><td>Деление: result = (input / operand) * scale</td></tr>
+                        <tr><td>arith.py</td><td>Универсальная арифметика (add/sub/mul/div)</td></tr>
+                        <tr><td>sum.py</td><td>Суммирование стека с обновлением EXPTIME</td></tr>
+                        <tr><td>med.py</td><td>Медианное комбинирование (тайловый режим)</td></tr>
+                        <tr><td>calibrate.py</td><td>Калибровка: dark, bias, flat, cosmetic</td></tr>
+                        <tr><td>autocalibrate.py</td><td>Автокалибровка по деревьям dark/flat</td></tr>
+                        <tr><td>normalize.py</td><td>Нормализация яркости (линейная регрессия)</td></tr>
+                        <tr><td>ngain.py</td><td>Нормализация умножением (к целевой медиане)</td></tr>
+                        <tr><td>noffset.py</td><td>Нормализация смещением (к целевой медиане)</td></tr>
+                        <tr><td>autoflat.py</td><td>Выравнивание градиента на флэтах</td></tr>
+                        <tr><td>cosme.py</td><td>Коррекция горячих пикселей по списку</td></tr>
+                        <tr><td>make_cosme.py</td><td>Генерация списка горячих пикселей</td></tr>
+                        <tr><td>makedark.py</td><td>Создание master dark и cosme.lst</td></tr>
+                        <tr><td>makeflat.py</td><td>Создание master flat по фильтрам</td></tr>
+                        <tr><td>newflat.py</td><td>Запись в лог обслуживания камеры</td></tr>
+                        <tr><td>darkopt.py</td><td>Оптимизированное вычитание дарка</td></tr>
+                        <tr><td>sortfits.py</td><td>Сортировка FITS по времени</td></tr>
+                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS)</td></tr>
+                        <tr><td>fft_align.py</td><td>FFT-выравнивание кадров</td></tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- Installation -->
+            <section id="install">
+                <h2>Установка</h2>
+
+                <h4>Зависимости</h4>
+                <p><strong>Обязательные:</strong> Python 3.6+, numpy, astropy</p>
+                <p><strong>Дополнительные:</strong> scipy (fft_align, autoflat), reproject (autosolve), astrometry.net</p>
+
+                <h4>Настройка</h4>
+                <p>Запустите <code>Commands/setup.bat</code> для добавления папки Commands в PATH:</p>
+                <pre><code>Commands\setup.bat</code></pre>
+                <p>После этого скрипты доступны как команды: <code>add</code>, <code>sub</code>, <code>med</code>, <code>calibrate</code> и т.д.</p>
+            </section>
+
+            <!-- Input/Output Formats -->
+            <section id="formats">
+                <h2>Форматы данных</h2>
+
+                <h3>Входные данные (input_spec)</h3>
+                <ul>
+                    <li><code>image.fit</code> — одиночный файл</li>
+                    <li><code>light0001.fit</code> — нумерованная последовательность (автопоиск 0002, 0003...)</li>
+                    <li><code>*.fit</code>, <code>light_*.fit</code> — маска с wildcards</li>
+                    <li><code>@list.txt</code> или <code>list.txt</code> — файл-список (по одному пути на строку)</li>
+                </ul>
+
+                <h3>Выходные данные (output_spec)</h3>
+                <ul>
+                    <li><code>output.fit</code> — одиночный файл</li>
+                    <li><code>out0001.fit</code> — нумерованный шаблон (автоинкремент)</li>
+                </ul>
+
+                <h3>Числовые константы</h3>
+                <p>Арифметические скрипты поддерживают числовые константы как операнды:</p>
+                <ul>
+                    <li><strong>Допустимо:</strong> <code>123</code>, <code>-456</code>, <code>123.456</code>, <code>-0.5</code></li>
+                    <li><strong>Недопустимо:</strong> <code>1e5</code>, <code>inf</code>, <code>nan</code>, <code>1_000</code></li>
+                </ul>
+
+                <div class="info-box note">
+                    <div class="info-box-title">Важно</div>
+                    <p>Хотя бы один аргумент должен быть файлом — из него берутся размеры изображения и FITS-заголовок.</p>
+                </div>
+
+                <h3>Типы данных FITS</h3>
+                <ul>
+                    <li><strong>Целочисленные:</strong> int8, int16, int32, int64 (signed/unsigned)</li>
+                    <li><strong>Вещественные:</strong> float32, float64</li>
+                </ul>
+                <p>При выводе: целочисленные значения ограничиваются диапазоном типа и округляются. NaN/Inf заменяются на 0.</p>
+            </section>
+
+            <!-- Arithmetic Scripts -->
+            <section id="add">
+                <h2>Арифметические операции</h2>
+
+                <div class="script-card">
+                    <h3>add.py <span class="badge">арифметика</span></h3>
+                    <p>Сложение значения или изображения с входными кадрами.</p>
+
+                    <div class="formula">result = input + operand + offset</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>add.py input_spec output_spec operand [offset]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">input_spec</span><span class="param-desc">входные файлы</span></div>
+                        <div class="param"><span class="param-name">output_spec</span><span class="param-desc">выходные файлы</span></div>
+                        <div class="param"><span class="param-name">operand</span><span class="param-desc">константа или FITS-файл</span></div>
+                        <div class="param"><span class="param-name">offset</span><span class="param-desc">смещение (по умолчанию 0)</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>add light0001.fit cal0001.fit 100
+add *.fit out0001.fit bias.fit
+add image.fit result.fit 1024</code></pre>
+                </div>
+            </section>
+
+            <section id="sub">
+                <div class="script-card">
+                    <h3>sub.py <span class="badge">арифметика</span></h3>
+                    <p>Вычитание значения или изображения из входных кадров.</p>
+
+                    <div class="formula">result = input - operand + offset</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>sub.py input_spec output_spec operand [offset]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>sub light0001.fit dark_sub0001.fit master_dark.fit
+sub raw.fit calibrated.fit dark.fit 100
+sub light0001.fit cal0001.fit 0        :: для термостабильных CCD</code></pre>
+                </div>
+            </section>
+
+            <section id="mul">
+                <div class="script-card">
+                    <h3>mul.py <span class="badge">арифметика</span></h3>
+                    <p>Умножение входных кадров на значение или изображение.</p>
+
+                    <div class="formula">result = input * operand * scale</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>mul.py input_spec output_spec operand [scale]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>mul light0001.fit scaled0001.fit 2.5
+mul image.fit result.fit gain_map.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="div">
+                <div class="script-card">
+                    <h3>div.py <span class="badge">арифметика</span></h3>
+                    <p>Деление входных кадров на значение или изображение. Деление на ноль даёт 0.</p>
+
+                    <div class="formula">result = (input / operand) * scale</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>div.py input_spec output_spec operand [scale]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>div light0001.fit flat_div0001.fit master_flat.fit 5000
+div image.fit normalized.fit 32768</code></pre>
+                </div>
+            </section>
+
+            <section id="arith">
+                <div class="script-card">
+                    <h3>arith.py <span class="badge">арифметика</span></h3>
+                    <p>Универсальный арифметический инструмент — объединяет add/sub/mul/div в одном скрипте.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>arith.py (add|sub|mul|div) input_spec output_spec operand [param]</code>
+                    </div>
+
+                    <h4>Операции</h4>
+                    <ul>
+                        <li><code>add</code> — result = input + operand + offset</li>
+                        <li><code>sub</code> — result = input - operand + offset</li>
+                        <li><code>mul</code> — result = input * operand * scale</li>
+                        <li><code>div</code> — result = (input / operand) * scale</li>
+                    </ul>
+
+                    <h4>Примеры</h4>
+                    <pre><code>arith add light0001.fit out0001.fit 100
+arith sub light0001.fit cal0001.fit dark.fit 500
+arith div image.fit result.fit flat.fit 5000</code></pre>
+                </div>
+            </section>
+
+            <!-- Stacking -->
+            <section id="sum">
+                <h2>Комбинирование</h2>
+
+                <div class="script-card">
+                    <h3>sum.py <span class="badge">стекинг</span></h3>
+                    <p>Суммирование стека FITS-изображений с обновлением метаданных.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Обновляет EXPTIME (суммарная экспозиция)</li>
+                        <li>Обновляет DATE-OBS (самое раннее время)</li>
+                        <li>Для int FITS: масштабирует до максимума типа</li>
+                        <li>Для float FITS: вычисляет среднее</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>sum.py input_spec output.fit</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>sum light0001.fit stacked.fit
+sum *.fit combined.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="med">
+                <div class="script-card">
+                    <h3>med.py <span class="badge">стекинг</span></h3>
+                    <p>Медианное комбинирование стека FITS-изображений с тайловым параллельным режимом.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Тайловый режим для больших изображений</li>
+                        <li>Точная попиксельная медиана</li>
+                        <li>Использует все ядра CPU</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>med.py input_spec output.fit [--tile N]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--tile N</span><span class="param-desc">размер тайла в пикселях (по умолчанию 2048, 0 = без тайлов)</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>med dark0001.fit master_dark.fit
+med flat*.fit master_flat.fit --tile 1024
+med @list.txt median.fit --tile 0</code></pre>
+                </div>
+            </section>
+
+            <!-- Calibration -->
+            <section id="calibrate">
+                <h2>Калибровка</h2>
+
+                <div class="script-card">
+                    <h3>calibrate.py <span class="badge">калибровка</span></h3>
+                    <p>Калибровка изображений: вычитание dark/bias, деление на flat, cosmetic correction.</p>
+
+                    <div class="formula">result = ((raw - bias) - dark * K) * MULT / flat</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>calibrate.py input_spec output_spec -d dark.fit [-b bias.fit] [-f flat.fit K] [-c cosme.lst] [-o]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">-d dark.fit</span><span class="param-desc">master dark (обязательно)</span></div>
+                        <div class="param"><span class="param-name">-b bias.fit</span><span class="param-desc">master bias (опционально)</span></div>
+                        <div class="param"><span class="param-name">-f flat.fit K</span><span class="param-desc">master flat и множитель K</span></div>
+                        <div class="param"><span class="param-name">-c cosme.lst</span><span class="param-desc">список горячих пикселей</span></div>
+                        <div class="param"><span class="param-name">-o, -optimize</span><span class="param-desc">оптимизация коэффициента дарка</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>calibrate raw0001.fit cal0001.fit -d dark10s.fit
+calibrate raw0001.fit cal0001.fit -d dark.fit -b bias.fit -f flat.fit 5000
+calibrate raw0001.fit cal0001.fit -d dark.fit -f flat.fit 5000 -c cosme.lst -o</code></pre>
+                </div>
+            </section>
+
+            <section id="autocalibrate">
+                <div class="script-card">
+                    <h3>autocalibrate.py <span class="badge">калибровка</span></h3>
+                    <p>Автоматическая калибровка с подбором dark/flat по EXPTIME, FILTER и JD.</p>
+
+                    <div class="formula">result = ((raw - dark) * MULT) / flat</div>
+                    <p style="margin-top: 8px; font-size: 0.9em;">MULT вычисляется автоматически как медиана flat-кадра.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Подбор darks по EXPTIME и JD (ближайший по времени)</li>
+                        <li>Подбор flats по FILTER и JD</li>
+                        <li>Автопоиск cosme.lst в папке darks (dark600s.fit → cosme600s.lst)</li>
+                        <li>Порядок: dark subtraction → cosmetic → flat division</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>autocalibrate.py [options] rawfiles.fit out_path dark_path flat_path</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Опции</h4>
+                        <div class="param"><span class="param-name">--bestflat</span><span class="param-desc">автоподбор лучшего flat для каждой сессии (по минимуму &sigma;)</span></div>
+                        <div class="param"><span class="param-name">--debug</span><span class="param-desc">сохранять превью в ./debug/ для проверки</span></div>
+                        <div class="param"><span class="param-name">--flat-future-days N</span><span class="param-desc">макс. дней в будущем для flat (по умолчанию 2)</span></div>
+                        <div class="param"><span class="param-name">--flatlog FILE</span><span class="param-desc">CSV-лог обновления флэтов</span></div>
+                    </div>
+
+                    <h4>Режим --bestflat</h4>
+                    <ul>
+                        <li>Группирует файлы по фильтру и сессии (noon-to-noon)</li>
+                        <li>Создаёт превью: downscale 4&times;4 после dark subtraction</li>
+                        <li>Для каждого flat: медианный блур → downscale → деление → &sigma;</li>
+                        <li>Выбирает flat с минимальной &sigma;</li>
+                    </ul>
+
+                    <h4>Режим --flatlog</h4>
+                    <p>CSV-файл с записями обслуживания камеры. Формат: <code>DATETIME_UTC,CAMERA_ID[,COMMENT]</code></p>
+                    <ul>
+                        <li>Сначала ищет в текущем интервале (между записями в логе)</li>
+                        <li>Если несколько флэтов — берёт ближайший (не новее +N дней)</li>
+                        <li>Если с +N дней ничего, но в интервале есть флэт — берёт его (приоритет интервала)</li>
+                        <li>Если интервал пуст — ищет глобально</li>
+                    </ul>
+
+                    <p><strong>Формат выходных файлов:</strong> <code>&lt;base&gt;_exp&lt;EXPTIME&gt;_&lt;FILTER&gt;_&lt;N&gt;.fit</code></p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>:: Базовое использование
+autocalibrate raw*.fit calibrated darks/ flats/
+
+:: С автоподбором лучшего flat
+autocalibrate --bestflat raw*.fit calibrated darks/ flats/
+
+:: С логом обслуживания камеры
+autocalibrate --flatlog maintenance.csv raw*.fit cal darks/ flats/
+
+:: Комбинация опций
+autocalibrate --bestflat --flat-future-days 3 raw*.fit out darks/ flats/</code></pre>
+                </div>
+            </section>
+
+            <section id="darkopt">
+                <div class="script-card">
+                    <h3>darkopt.py <span class="badge">калибровка</span></h3>
+                    <p>Оптимизированное вычитание дарка с автоматическим подбором коэффициента K.</p>
+
+                    <div class="formula">result = input - K * dark</div>
+
+                    <h4>Алгоритм подбора K</h4>
+                    <ul>
+                        <li>Разбивает изображение на тайлы 64&times;64</li>
+                        <li>Исключает тайлы с нулями или насыщением</li>
+                        <li>Выбирает самый тёмный тайл</li>
+                        <li>Вычисляет K методом наименьших квадратов</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>darkopt.py input_spec output_spec master_dark.fit [cosme.lst]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>darkopt light0001.fit opt0001.fit master_dark.fit
+darkopt light0001.fit opt0001.fit dark.fit cosme.lst</code></pre>
+                </div>
+            </section>
+
+            <!-- Normalization -->
+            <section id="normalize">
+                <h2>Нормализация</h2>
+
+                <div class="script-card">
+                    <h3>normalize.py <span class="badge">нормализация</span></h3>
+                    <p>Нормализация яркости изображений относительно референсного кадра методом линейной регрессии.</p>
+
+                    <div class="formula">Модель: I = B * R + C → Результат: (I - C) / B</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>normalize.py input_spec output_spec [basefile.fit] [method]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Методы</h4>
+                        <div class="param"><span class="param-name">1</span><span class="param-desc">линейная регрессия (по умолчанию)</span></div>
+                        <div class="param"><span class="param-name">2</span><span class="param-desc">робастная регрессия (sigma-clipping)</span></div>
+                        <div class="param"><span class="param-name">3</span><span class="param-desc">глобальная итеративная нормализация</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>normalize light0001.fit norm0001.fit
+normalize light0001.fit norm0001.fit reference.fit 2</code></pre>
+                </div>
+            </section>
+
+            <section id="ngain">
+                <div class="script-card">
+                    <h3>ngain.py <span class="badge">нормализация</span></h3>
+                    <p>Нормализация умножением — приводит медиану каждого кадра к целевому значению. Аналог NGAIN в Iris.</p>
+
+                    <div class="formula">result = input * (target_median / current_median)</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>ngain.py input_spec output_spec target_median</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>ngain flat0001.fit norm_flat0001.fit 10000
+ngain *.fit normalized0001.fit 5000</code></pre>
+                </div>
+            </section>
+
+            <section id="noffset">
+                <div class="script-card">
+                    <h3>noffset.py <span class="badge">нормализация</span></h3>
+                    <p>Нормализация смещением — приводит медиану к целевому значению путём добавления константы. Аналог NOFFSET в Iris.</p>
+
+                    <div class="formula">result = input + (target_median - current_median)</div>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>noffset.py input_spec output_spec target_median</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>noffset bias0001.fit norm_bias0001.fit 1000
+noffset light0001.fit out0001.fit 10000</code></pre>
+                </div>
+            </section>
+
+            <!-- Master Frames -->
+            <section id="makedark">
+                <h2>Создание мастер-кадров</h2>
+
+                <div class="script-card">
+                    <h3>makedark.py <span class="badge">мастер-кадры</span></h3>
+                    <p>Автоматическое создание master dark и списков косметической коррекции из сырых дарков.</p>
+
+                    <h4>Алгоритм</h4>
+                    <ol>
+                        <li>Сканирует файлы, отбирает с IMAGETYP='Dark Frame'</li>
+                        <li>Группирует по времени экспозиции (EXPTIME)</li>
+                        <li>Для каждой группы: вычитает bias → медианное комбинирование → генерация cosme.lst</li>
+                    </ol>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>makedark.py input_spec [bias_spec]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">input_spec</span><span class="param-desc">директория, маска или последовательность дарков</span></div>
+                        <div class="param"><span class="param-name">bias_spec</span><span class="param-desc">константа, FITS-файл или список bias (по умолчанию 0)</span></div>
+                    </div>
+
+                    <h4>Выходные файлы</h4>
+                    <ul>
+                        <li><code>dark&lt;exp&gt;.fit</code> — master dark для каждой экспозиции</li>
+                        <li><code>cosme&lt;exp&gt;.lst</code> — список горячих пикселей</li>
+                        <li><code>bias.fit</code> — master bias (если указан список)</li>
+                    </ul>
+
+                    <h4>Примеры</h4>
+                    <pre><code>makedark C:\Darks                    :: все дарки из папки, bias=0
+makedark dark0001.fit                :: последовательность, bias=0
+makedark *.fit 1024                  :: маска, bias=константа
+makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pre>
+                </div>
+            </section>
+
+            <section id="makeflat">
+                <div class="script-card">
+                    <h3>makeflat.py <span class="badge">мастер-кадры</span></h3>
+                    <p>Автоматическое создание master flat для каждого фильтра из сырых флэтов.</p>
+
+                    <h4>Алгоритм</h4>
+                    <ol>
+                        <li>Сканирует файлы, отбирает с IMAGETYP='Flat Frame'</li>
+                        <li>Группирует по фильтру (FILTER)</li>
+                        <li>Ищет dark&lt;exp&gt;.fit и cosme&lt;exp&gt;.lst (или запускает makedark)</li>
+                        <li>Для каждой группы: dark subtraction → ngain → медиана → cosme</li>
+                    </ol>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>makeflat.py input_spec [target_median]</code>
+                    </div>
+
+                    <h4>Выходные файлы</h4>
+                    <p><code>flat_&lt;filter&gt;.fit</code> — master flat для каждого фильтра</p>
+                    <table>
+                        <tr><th>FILTER</th><th>Код файла</th></tr>
+                        <tr><td>OIII</td><td>flat_o.fit</td></tr>
+                        <tr><td>SII</td><td>flat_s.fit</td></tr>
+                        <tr><td>Ha</td><td>flat_h.fit</td></tr>
+                        <tr><td>L, R, G, B</td><td>flat_l.fit, flat_r.fit, ...</td></tr>
+                    </table>
+
+                    <h4>Примеры</h4>
+                    <pre><code>makeflat C:\Flats                    :: все флэты, median=5000
+makeflat C:\Flats 10000              :: с другим target_median
+makeflat flat*.fit                   :: маска файлов</code></pre>
+                </div>
+            </section>
+
+            <section id="newflat">
+                <div class="script-card">
+                    <h3>newflat.py <span class="badge">утилита</span></h3>
+                    <p>Добавление записи в лог обслуживания камеры для использования с <code>autocalibrate --flatlog</code>.</p>
+
+                    <p>Применение: отмечает момент, когда flat-кадры становятся невалидными (чистка сенсора, замена фильтров и т.д.)</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>newflat.py --camera CAMERA_ID --log FILE [--date DATETIME] [--comment TEXT]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--camera</span><span class="param-desc">идентификатор камеры (подстрока INSTRUME)</span></div>
+                        <div class="param"><span class="param-name">--log</span><span class="param-desc">путь к CSV-файлу лога</span></div>
+                        <div class="param"><span class="param-name">--date</span><span class="param-desc">дата/время ISO (по умолчанию текущее UTC)</span></div>
+                        <div class="param"><span class="param-name">--comment</span><span class="param-desc">комментарий</span></div>
+                    </div>
+
+                    <h4>Формат лога</h4>
+                    <pre><code># Maintenance log
+DATETIME_UTC,CAMERA_ID,COMMENT
+2024-05-18T14:30:00,2600MM,Cleaned sensor
+2024-12-21T10:00:00,2600MM,Changed dust cover</code></pre>
+
+                    <h4>Примеры</h4>
+                    <pre><code>newflat --camera 2600MM --log maintenance.csv
+newflat --camera 2600MM --log maint.csv --date 2024-05-18T14:30:00
+newflat --camera "ASI2600" --log maint.csv --comment "Sensor cleaning"</code></pre>
+                </div>
+            </section>
+
+            <!-- Correction -->
+            <section id="cosme">
+                <h2>Коррекция</h2>
+
+                <div class="script-card">
+                    <h3>cosme.py <span class="badge">коррекция</span></h3>
+                    <p>Коррекция горячих пикселей по списку координат. Заменяет пиксели средним значением соседей 3&times;3.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>cosme.py input_spec output_spec cosme.lst [-t]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">cosme.lst</span><span class="param-desc">список координат (формат: P x y)</span></div>
+                        <div class="param"><span class="param-name">-t</span><span class="param-desc">тестовый режим: создаёт маску вместо коррекции</span></div>
+                    </div>
+
+                    <h4>Формат cosme.lst</h4>
+                    <pre><code>P 123 456
+P 789 101
+# комментарий</code></pre>
+
+                    <h4>Примеры</h4>
+                    <pre><code>cosme light0001.fit clean0001.fit cosme.lst
+cosme image.fit mask.fit cosme.lst -t</code></pre>
+                </div>
+            </section>
+
+            <section id="make_cosme">
+                <div class="script-card">
+                    <h3>make_cosme.py <span class="badge">коррекция</span></h3>
+                    <p>Генерация списка горячих пикселей из master dark. Находит 10000 самых ярких пикселей.</p>
+
+                    <p><em>Алиас:</em> <code>find_hot</code></p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>make_cosme.py input.fit cosme.lst</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>make_cosme master_dark.fit cosme.lst</code></pre>
+                </div>
+            </section>
+
+            <section id="autoflat">
+                <div class="script-card">
+                    <h3>autoflat.py <span class="badge">коррекция</span></h3>
+                    <p>Выравнивание градиента на flat-кадрах методом полиномиальной коррекции фона.</p>
+
+                    <h4>Алгоритм</h4>
+                    <ol>
+                        <li>Расширение маски нулевых пикселей</li>
+                        <li>Медианная фильтрация</li>
+                        <li>Min-биннинг для получения фона</li>
+                        <li>Полиномиальная аппроксимация поверхности</li>
+                        <li>Коррекция: result = input - model + offset</li>
+                    </ol>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>autoflat.py [-d] input_spec output_spec [poly_order]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">-d</span><span class="param-desc">debug режим (сохраняет промежуточные изображения)</span></div>
+                        <div class="param"><span class="param-name">poly_order</span><span class="param-desc">порядок полинома (по умолчанию 1: плоскость)</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>autoflat flat0001.fit corrected0001.fit
+autoflat -d flat.fit debug_flat.fit 2</code></pre>
+                </div>
+            </section>
+
+            <!-- Alignment -->
+            <section id="autosolve">
+                <h2>Выравнивание</h2>
+
+                <div class="script-card">
+                    <h3>autosolve.py <span class="badge">выравнивание</span></h3>
+                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>autosolve.py [options] input_spec output_spec</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Основные опции</h4>
+                        <div class="param"><span class="param-name">--no-solve</span><span class="param-desc">пропустить астрометрическое решение</span></div>
+                        <div class="param"><span class="param-name">--rectify</span><span class="param-desc">репроекция на касательную плоскость (TAN)</span></div>
+                        <div class="param"><span class="param-name">--rect-center-ra</span><span class="param-desc">RA центра проекции (градусы)</span></div>
+                        <div class="param"><span class="param-name">--rect-center-dec</span><span class="param-desc">Dec центра проекции (градусы)</span></div>
+                        <div class="param"><span class="param-name">--individual</span><span class="param-desc">свой центр проекции для каждого файла</span></div>
+                        <div class="param"><span class="param-name">--align</span><span class="param-desc">субпиксельное выравнивание</span></div>
+                        <div class="param"><span class="param-name">--ref file.fit</span><span class="param-desc">референсный кадр</span></div>
+                        <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
+                        <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
+                    </div>
+
+                    <h4>Репроекция (--rectify)</h4>
+                    <p>Преобразует изображение в гномоническую (TAN) проекцию — проекцию на плоскость, касательную к небесной сфере. По умолчанию центр берётся из первого файла; можно задать явно через <code>--rect-center-ra</code> и <code>--rect-center-dec</code>.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>autosolve light0001.fit solved0001.fit
+autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
+autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="fft_align">
+                <div class="script-card">
+                    <h3>fft_align.py <span class="badge">выравнивание</span></h3>
+                    <p>FFT-выравнивание кадров: поворот, масштаб, субпиксельный сдвиг с пирамидальным поиском.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Фазовая корреляция для поиска сдвига</li>
+                        <li>Пирамидальный поиск угла и масштаба</li>
+                        <li>Постобработка: локальная аффинная коррекция</li>
+                        <li>Параллельная обработка</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>fft_align.py reference input_spec output_spec [options]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Основные опции</h4>
+                        <div class="param"><span class="param-name">--superfine</span><span class="param-desc">пирамидальный режим высокой точности</span></div>
+                        <div class="param"><span class="param-name">--post-correction</span><span class="param-desc">локальная аффинная коррекция</span></div>
+                        <div class="param"><span class="param-name">--max-angle N</span><span class="param-desc">максимальный угол поиска (по умолчанию 5&deg;)</span></div>
+                        <div class="param"><span class="param-name">--scale-delta N</span><span class="param-desc">диапазон масштаба &plusmn;N (по умолчанию 0.01)</span></div>
+                        <div class="param"><span class="param-name">--flux</span><span class="param-desc">режим сохранения потока</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>fft_align ref.fit light0001.fit aligned0001.fit
+fft_align ref.fit *.fit out0001.fit --superfine --post-correction
+fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2</code></pre>
+                </div>
+            </section>
+
+            <section id="sortfits">
+                <div class="script-card">
+                    <h3>sortfits.py <span class="badge">утилита</span></h3>
+                    <p>Сортировка FITS-файлов по времени наблюдения с возможностью разбиения на сессии.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>sortfits.py input_spec output_pattern [-s|--sessions] [--gap-hours H]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">-s, --sessions</span><span class="param-desc">режим сессий (выход: &lt;base&gt;_Sssss_Fffff.fit)</span></div>
+                        <div class="param"><span class="param-name">--gap-hours H</span><span class="param-desc">разрыв для разделения сессий (по умолчанию 1.0)</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>sortfits light0001.fit sorted0001.fit
+sortfits *.fit session.fit --sessions --gap-hours 2</code></pre>
+                </div>
+            </section>
+
+            <!-- Footer -->
+            <div class="footer">
+                <p>AstroBatch &mdash; Инструменты для пакетной обработки астрономических FITS-изображений</p>
+                <p>Python 3.6+ &bull; numpy &bull; astropy</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Highlight active navigation item based on scroll position
+        document.addEventListener('DOMContentLoaded', function() {
+            const sections = document.querySelectorAll('section[id]');
+            const navLinks = document.querySelectorAll('.nav-section a');
+
+            function updateActiveLink() {
+                let current = '';
+                sections.forEach(section => {
+                    const sectionTop = section.offsetTop;
+                    if (window.scrollY >= sectionTop - 100) {
+                        current = section.getAttribute('id');
+                    }
+                });
+
+                navLinks.forEach(link => {
+                    link.classList.remove('active');
+                    if (link.getAttribute('href') === '#' + current) {
+                        link.classList.add('active');
+                    }
+                });
+            }
+
+            window.addEventListener('scroll', updateActiveLink);
+            updateActiveLink();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+python sub.py test.fit out.fit op2.fit 20000

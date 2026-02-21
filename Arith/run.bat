@@ -1,0 +1,1 @@
+python arith.py div test.fit out.fit op2.fit 10000
