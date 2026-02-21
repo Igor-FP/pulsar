@@ -1,6 +1,88 @@
-# AstroBatch
+<!-- ============== VARIANT 1 - Classic ============== -->
+<!--
+```
+ ____  _   _ _     ____    _    ____
+|  _ \| | | | |   / ___|  / \  |  _ \
+| |_) | | | | |   \___ \ / _ \ | |_) |
+|  __/| |_| | |___ ___) / ___ \|  _ <
+|_|    \___/|_____|____/_/   \_\_| \_\
 
-**Command-line batch processing for astronomical images**
+Portable Utility Library for Shell Astrophotography Routines
+```
+-->
+
+<!-- ============== VARIANT 2 - Box with stars ============== -->
+<!--
+```
+╔═══════════════════════════════════════════════════════════════════╗
+║  ★  P U L S A R  ★                                                ║
+║  Portable Utility Library for Shell Astrophotography Routines    ║
+╚═══════════════════════════════════════════════════════════════════╝
+```
+-->
+
+<!-- ============== VARIANT 3 - Minimalist ============== -->
+<!--
+```
+    ____  __  ____   ___   ___  ____
+   / __ \/ / / / /  / __\ / _ \/ __ \
+  / /_/ / /_/ / /__/\__ \/ /_\ / /_/ /
+ / .___/\____/____/\___//_/ \_\____/
+/_/  Portable Utility Library for Shell Astrophotography Routines
+```
+-->
+
+<!-- ============== VARIANT 4 - Cosmic ============== -->
+<!--
+```
+       *  .  *       .       *    .        *   .
+    .    *       P U L S A R        .  *      .
+  *    .    *                   .        *
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Portable Utility Library for Shell Astrophotography Routines
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       .    *    .        *   .      *     .
+```
+-->
+
+<!-- ============== VARIANT 5 - Block (big) ============== -->
+<!--
+```
+██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
+██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
+██████╔╝██║   ██║██║     ███████╗███████║██████╔╝
+██╔═══╝ ██║   ██║██║     ╚════██║██╔══██║██╔══██╗
+██║     ╚██████╔╝███████╗███████║██║  ██║██║  ██║
+╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+
+Portable Utility Library for Shell Astrophotography Routines
+```
+-->
+
+<!-- ============== VARIANT 6 - Classic with letter meanings ============== -->
+<!--
+```
+ ____  _   _ _     ____    _    ____
+|  _ \| | | | |   / ___|  / \  |  _ \
+| |_) | | | | |   \___ \ / _ \ | |_) |
+|  __/| |_| | |___ ___) / ___ \|  _ <
+|_|    \___/|_____|____/_/   \_\_| \_\
+
+[P]ortable [U]tility [L]ibrary for [S]hell [A]strophotography [R]outines
+```
+-->
+
+<!-- ============== CHOSEN VARIANT (uncomment one above and paste here) ============== -->
+
+```
+██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
+██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
+██████╔╝██║   ██║██║     ███████╗███████║██████╔╝
+██╔═══╝ ██║   ██║██║     ╚════██║██╔══██║██╔══██╗
+██║     ╚██████╔╝███████╗███████║██║  ██║██║  ██║
+╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+```
+### **P**ortable **U**tility **L**ibrary for **S**hell **A**strophotography **R**outines
 
 [![Python 3.6+](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -10,11 +92,11 @@
 
 ## Vision and Goals
 
-**AstroBatch** is a suite of command-line tools for complete automation of amateur astrophotography processing — from raw frame calibration to final results.
+**PULSAR** is a suite of command-line tools for complete automation of amateur astrophotography processing — from raw frame calibration to final results.
 
 ### Inspiration
 
-This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.htm)** by Christian Buil — a legendary astronomical image processing software. AstroBatch brings the IRIS philosophy to the modern command line, enabling full automation through scripts and pipelines.
+This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.htm)** by Christian Buil — a legendary astronomical image processing software. PULSAR brings the IRIS philosophy to the modern command line, enabling full automation through scripts and pipelines.
 
 ### Project Goals
 
@@ -70,8 +152,8 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Installation
 
 ```bash
-git clone https://github.com/ichekailin/AstroBatch.git
-cd AstroBatch
+git clone https://github.com/ichekailin/PULSAR.git
+cd PULSAR
 
 # Windows: add Commands to PATH
 Commands\setup.bat
@@ -186,7 +268,7 @@ On Windows, astrometry (autosolve.py) uses WSL with astrometry.net installed.
 ## Project Structure
 
 ```
-AstroBatch/
+PULSAR/
 ├── Commands/          # Batch wrappers for Windows PATH
 ├── lib/               # Shared modules (batch_utils.py)
 ├── Add/               # add.py
