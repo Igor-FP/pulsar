@@ -4,11 +4,12 @@
 import sys
 import os
 import glob
+import traceback
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, gaussian_filter
 from astropy.io import fits
 
 # Local paths
@@ -32,6 +33,41 @@ except Exception:
     HAVE_COSME = False
 
 FITS_EXTS = (".fit", ".fits", ".fts")
+
+# =============================================================================
+# BESTFLAT ALGORITHM CONSTANTS
+# =============================================================================
+#
+# Best flat selection algorithm (--bestflat mode):
+#
+# 1. PREPARE LIGHT PREVIEWS (per session):
+#    - Load each light frame, subtract dark
+#    - Downscale by BESTFLAT_DOWNSCALE_FACTOR (8x8 averaging)
+#    - Apply median filter (size=BESTFLAT_LIGHT_MEDIAN_SIZE) to remove stars
+#    - Combine all session lights via pixel-wise median
+#
+# 2. PREPARE FLAT PREVIEWS (cached):
+#    - Downscale by BESTFLAT_DOWNSCALE_FACTOR (no median filter - preserve dust!)
+#    - Normalize to median 5000 for consistent comparison
+#
+# 3. EVALUATE EACH CANDIDATE FLAT:
+#    - Divide: light_preview / flat_preview
+#    - Apply high-pass filter (removes gradients, keeps dust/artifacts)
+#      Sigma = BESTFLAT_HIGHPASS_SIGMA_FACTOR * mean(width, height)
+#    - Apply gaussian blur (size=BESTFLAT_SIGMA_BLUR_SIZE) to suppress noise
+#    - Compute sigma (std deviation) of the result
+#
+# 4. SELECT BEST:
+#    - Flat with lowest sigma = best dust/vignetting match
+#
+# =============================================================================
+
+BESTFLAT_DOWNSCALE_FACTOR = 8       # Downscale factor for previews (8 = 8x8 averaging)
+BESTFLAT_LIGHT_MEDIAN_SIZE = 16     # Median filter size for lights (removes stars)
+BESTFLAT_HIGHPASS_SIGMA_FACTOR = 0.3  # High-pass gaussian sigma as fraction of image size
+BESTFLAT_SIGMA_BLUR_SIZE = 5        # Gaussian blur before sigma calculation (removes HF noise)
+BESTFLAT_DEBUG_SAVE_BLURRED = True  # Save debug files with blur applied (same as sigma input)
+BESTFLAT_DEBUG_CALIBRATION_LINE = True  # Add calibration line (0 | 32767) to fix viewer scaling
 
 
 def print_usage():
@@ -316,6 +352,9 @@ def load_flats(flat_path):
 
             # Compute multiplier as fast median of the flat
             mult = batch_utils.fast_median(data)
+            if mult <= 0:
+                sys.stderr.write(f"WARNING: Flat '{path}' has zero or negative median, skipped.\n")
+                continue
 
             flats.append({
                 "path": path,
@@ -503,42 +542,67 @@ def is_flat_in_interval(flat_jd, interval):
     return True
 
 
-def downscale_4x4(data):
+def downscale_8x8(data):
     """
-    Downscale image by 4x4 averaging.
+    Downscale image by 8x8 averaging.
 
-    Reduces image size by factor of 4 in each dimension.
-    Truncates to fit exact 4x4 blocks.
+    Reduces image size by factor of 8 in each dimension.
+    Truncates to fit exact 8x8 blocks.
     """
     h, w = data.shape
-    new_h = h // 4
-    new_w = w // 4
+    new_h = h // 8
+    new_w = w // 8
 
-    # Truncate to exact multiple of 4
-    truncated = data[:new_h * 4, :new_w * 4]
+    # Truncate to exact multiple of 8
+    truncated = data[:new_h * 8, :new_w * 8]
 
-    # Reshape to (new_h, 4, new_w, 4) and average
-    reshaped = truncated.reshape(new_h, 4, new_w, 4)
+    # Reshape to (new_h, 8, new_w, 8) and average
+    reshaped = truncated.reshape(new_h, 8, new_w, 8)
     return reshaped.mean(axis=(1, 3))
 
 
-def remove_linear_gradient(data):
+def apply_highpass_filter(data):
     """
-    Fit and remove linear gradient (plane) from image.
+    Apply high-pass filter by subtracting gaussian-blurred copy.
 
-    Fits z = ax + by + c using least squares and subtracts it.
-    Used only for sigma evaluation, not for actual calibration.
+    Blur sigma = BESTFLAT_HIGHPASS_SIGMA_FACTOR * ((width + height) / 2)
+    This removes large-scale gradients while preserving local variations
+    (dust spots, flat field artifacts).
+
+    Returns:
+        (highpassed, blur_mean) - highpassed data and mean of the blurred image
+                                  (for debug file offset restoration)
     """
     h, w = data.shape
-    y, x = np.mgrid[:h, :w]
+    sigma = BESTFLAT_HIGHPASS_SIGMA_FACTOR * ((w + h) / 2)
+    blurred = gaussian_filter(data, sigma=sigma)
+    blur_mean = np.mean(blurred)
+    return data - blurred, blur_mean
 
-    # Flatten for least squares
-    A = np.column_stack([x.ravel(), y.ravel(), np.ones(h * w)])
-    coeffs, _, _, _ = np.linalg.lstsq(A, data.ravel(), rcond=None)
 
-    # Reconstruct plane and subtract
-    plane = coeffs[0] * x + coeffs[1] * y + coeffs[2]
-    return data - plane
+def normalize_to_median(data, target_median=5000):
+    """
+    Normalize image to target median (ngain-style).
+
+    Scales so that median becomes target_median.
+    Clamps to uint16 range [0, 32767].
+    """
+    # Shift to positive range first (high-pass can produce negatives)
+    min_val = np.min(data)
+    shifted = data - min_val
+
+    # Scale to target median
+    shifted_median = np.median(shifted)
+    if shifted_median > 0:
+        scaled = shifted * (target_median / shifted_median)
+    else:
+        # shifted_median == 0 means median(data) == min(data)
+        # Can't scale meaningfully, just shift to put median at target
+        # (this will make the output have median = target_median when min_val == median)
+        scaled = shifted + target_median
+
+    # Clamp to 0-32767
+    return np.clip(scaled, 0, 32767)
 
 
 def choose_dark(raw_exptime, raw_jd, darks):
@@ -743,12 +807,15 @@ def select_best_flat_for_session(light_previews, candidate_flats, flat_previews_
     for flat in candidate_flats:
         flat_path = flat["path"]
 
-        # Get or compute downscaled flat (with median blur to remove pixel noise)
+        # Get or compute downscaled flat (NO median filter - preserve dust!)
         if flat_path not in flat_previews_cache:
-            # Median blur (16px kernel) before downscale to smooth pixel noise
-            # while preserving large-scale features (dust spots, vignetting)
-            blurred = median_filter(flat["data"], size=16)
-            downscaled = downscale_4x4(blurred)
+            # Skip if flat has invalid multiplier
+            if flat["mult"] <= 0:
+                sys.stderr.write(f"WARNING: Flat '{os.path.basename(flat_path)}' has invalid mult, skipping.\n")
+                continue
+
+            # Downscale only (no median filter - we need to see dust spots)
+            downscaled = downscale_8x8(flat["data"])
             # Normalize to median 5000 for consistent comparison
             downscaled = downscaled * (5000.0 / flat["mult"])
             flat_previews_cache[flat_path] = downscaled
@@ -777,28 +844,32 @@ def select_best_flat_for_session(light_previews, candidate_flats, flat_previews_
         divided = light_median * 5000.0 / safe_flat
         divided = np.nan_to_num(divided, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Remove linear gradient before computing sigma
-        # (gradient is flatbox artifact, doesn't indicate flat mismatch)
-        divided_degrad = remove_linear_gradient(divided)
+        # Apply high-pass filter before computing sigma
+        # (removes large-scale gradients while preserving dust/vignetting artifacts)
+        highpassed, blur_mean = apply_highpass_filter(divided)
 
-        # Standard deviation from mean (after gradient removal)
-        sigma = np.std(divided_degrad)
+        # Apply gaussian blur to suppress high-frequency noise before sigma calculation
+        blurred_for_sigma = gaussian_filter(highpassed, sigma=BESTFLAT_SIGMA_BLUR_SIZE)
+
+        # Standard deviation (after high-pass and blur)
+        sigma = np.std(blurred_for_sigma)
 
         # Get date from flat JD for display
         flat_date = jd_to_local_datetime(flat["jd"]).strftime("%Y-%m-%d %H:%M")
+        flat_date_str = jd_to_local_datetime(flat["jd"]).strftime("%Y%m%d")
 
-        # Save divided preview to session debug folder (original, without gradient removal)
+        # Store data for debug output (will be saved after sorting to mark best)
         if session_debug_dir:
-            flat_basename = os.path.splitext(os.path.basename(flat_path))[0]
-            flat_date_str = jd_to_local_datetime(flat["jd"]).strftime("%Y%m%d")
-            divided_name = f"divided_{flat_basename}_{flat_date_str}_sigma{sigma:.1f}.fit"
-            divided_path = os.path.join(session_debug_dir, divided_name)
-            fits.writeto(divided_path, divided.astype(np.float32), overwrite=True)
-
+            debug_data = blurred_for_sigma if BESTFLAT_DEBUG_SAVE_BLURRED else highpassed
+        else:
+            debug_data = None
         results.append({
             "flat": flat,
             "sigma": sigma,
             "date": flat_date,
+            "date_str": flat_date_str,
+            "debug_data": debug_data,
+            "blur_mean": blur_mean,
         })
 
     if not results:
@@ -806,6 +877,31 @@ def select_best_flat_for_session(light_previews, candidate_flats, flat_previews_
 
     # Sort by sigma ascending
     results.sort(key=lambda r: r["sigma"])
+
+    # Save debug files with _best marker for the best one
+    if session_debug_dir:
+        for i, r in enumerate(results):
+            flat_basename = os.path.splitext(os.path.basename(r["flat"]["path"]))[0]
+            best_marker = "_best" if i == 0 else ""
+
+            debug_data = r["debug_data"]
+            if debug_data is None:
+                sys.stderr.write(f"DEBUG: debug_data is None for flat {flat_basename}\n")
+                continue
+
+            # Shift by blur_mean to restore offset, scale down, clamp negatives to 0
+            shifted = (debug_data + r["blur_mean"]) * 0.5
+            shifted = np.clip(shifted, 0, None)
+
+            # Add calibration line to fix viewer scaling (first row: left half=0, right half=32767)
+            if BESTFLAT_DEBUG_CALIBRATION_LINE:
+                h, w = shifted.shape
+                shifted[0, :w // 2] = 0
+                shifted[0, w // 2:] = 32767
+
+            debug_name = f"hp_{flat_basename}_{r['date_str']}_sigma{r['sigma']:.1f}{best_marker}.fit"
+            debug_path = os.path.join(session_debug_dir, debug_name)
+            fits.writeto(debug_path, shifted.astype(np.float32), overwrite=True)
 
     # Print results table
     print(f"\n--- Best flat selection for session {session_key}, filter '{filter_name}' ---")
@@ -994,15 +1090,26 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
                 # Apply cosmetic correction (from dark's cosme_coords)
                 work = apply_cosmetic_if_needed(work, dark.get("cosme_coords"))
 
-                # Downscale
-                preview = downscale_4x4(work)
+                # Downscale and median filter to remove stars
+                preview = downscale_8x8(work)
+                preview = median_filter(preview, size=BESTFLAT_LIGHT_MEDIAN_SIZE)
                 light_previews.append(preview)
 
             # Select best flat
-            best_flat, _ = select_best_flat_for_session(
-                light_previews, candidate_flats, flat_previews_cache,
-                session_key, filter_name, debug_dir, group_maintenance_interval
-            )
+            try:
+                best_flat, _ = select_best_flat_for_session(
+                    light_previews, candidate_flats, flat_previews_cache,
+                    session_key, filter_name, debug_dir, group_maintenance_interval
+                )
+            except ZeroDivisionError as e:
+                sys.stderr.write(f"\n=== ZeroDivisionError in select_best_flat_for_session ===\n")
+                sys.stderr.write(f"Session: {session_key}, Filter: {filter_name}\n")
+                sys.stderr.write(f"Candidate flats ({len(candidate_flats)}):\n")
+                for f in candidate_flats:
+                    sys.stderr.write(f"  {f['path']}: mult={f['mult']}\n")
+                sys.stderr.write(f"\nFull traceback:\n")
+                traceback.print_exc(file=sys.stderr)
+                raise
             session_flat_map[(filter_name, session_key)] = (best_flat, used_L_fallback)
 
     # Build jobs
