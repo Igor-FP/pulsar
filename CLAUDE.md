@@ -76,13 +76,15 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | makedark.py | Meta-script: create master darks + cosme lists |
 | makeflat.py | Meta-script: create master flats per filter |
 | sortfits.py | Organize FITS by metadata |
+| fits2tiff.py | FITS to TIFF conversion (8/16/32-bit) |
+| tiff2fits.py | TIFF to FITS conversion (with header recovery) |
 | fft_align.py | FFT-based image alignment |
 
 ## Dependencies
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py)
 
 ## Running Tools
 

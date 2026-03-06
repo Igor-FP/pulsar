@@ -1,2 +1,4 @@
-call calibrate test\*.fit test_cal_l_001.fit -d dark10s.fit -f flat_l.fit 5000 -c cosme10s.lst
+autocalibrate --bestflat --debug .\src\*.fit .\output\ e:\Astro\CalibrationLibrary\ASI2600MM\dark e:\Astro\CalibrationLibrary\ASI2600MM\Flat\SWQ300pSharpStar
+  
+ 
 pause

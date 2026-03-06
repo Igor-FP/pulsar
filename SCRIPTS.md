@@ -29,6 +29,8 @@
 | **darkopt.py** | Оптимизированное вычитание дарка (подбор коэффициента K) |
 | **sortfits.py** | Сортировка FITS по времени, разбиение на сессии |
 | **autosolve.py** | Астрометрическое решение (WCS), ректификация, выравнивание |
+| **fits2tiff.py** | Конвертация FITS → TIFF (8/16/32-bit) |
+| **tiff2fits.py** | Конвертация TIFF → FITS (с восстановлением заголовков) |
 | **fft_align.py** | FFT-выравнивание кадров (поворот, масштаб, сдвиг) |
 
 ---
@@ -788,6 +790,102 @@ autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.
 
 ---
 
+### fits2tiff.py
+
+**Назначение**: Конвертация FITS-изображений в формат TIFF.
+
+**Особенности**:
+- Выбор битности: 8-bit (stretch), 16-bit (clamp), 32-bit float (нормализация к [0,1])
+- Автоопределение битности по типу данных FITS
+- Wildcard в выходном шаблоне: `*.tif` сохраняет имена входных файлов
+- 32-bit float нормализуется к [0.0, 1.0] для совместимости с Photoshop
+
+**Зависимости**: Pillow (`pip install Pillow`)
+
+**Синтаксис**:
+```
+fits2tiff.py [--bits 8|16|32] [--flip] input_spec output_spec
+```
+
+**Параметры**:
+- `input_spec` — входные файлы (стандартные форматы: файл, маска, последовательность, @список)
+- `output_spec` — выходной файл `.tif`/`.tiff`, нумерованный шаблон (`out0001.tif`) или wildcard (`*.tif`)
+- `--bits 8` — линейный stretch [min,max] → [0,255], uint8
+- `--bits 16` — clamp к [0,65535], uint16
+- `--bits 32` — нормализация [min,max] → [0.0,1.0], float32
+- (без --bits) — авто: int8/uint8→8, int16/uint16→16, остальное→32
+- `--flip` — вертикальное отражение (FITS bottom-left → TIFF top-left)
+
+**Примеры**:
+```batch
+:: Одиночный файл (авто битность)
+fits2tiff image.fit image.tif
+
+:: Пакетная конвертация с сохранением имён
+fits2tiff *.fit *.tif
+
+:: 8-bit для превью
+fits2tiff --bits 8 light0001.fit preview0001.tif
+
+:: Нумерованный выход
+fits2tiff --bits 16 *.fit out0001.tif
+```
+
+---
+
+### tiff2fits.py
+
+**Назначение**: Конвертация TIFF-изображений обратно в формат FITS с восстановлением заголовков.
+
+**Особенности**:
+- Автоматическое восстановление заголовков из перезаписываемого FITS-файла
+- Явное указание источника заголовков через `--header`
+- Поддержка TIFF 8-bit (L), 16-bit (I;16), 32-bit float (F)
+- RGB TIFF автоматически конвертируется в grayscale
+
+**Зависимости**: Pillow (`pip install Pillow`)
+
+**Логика заголовков** (приоритет):
+1. `--header source.fit` — заголовки из указанного файла
+2. Выходной файл уже существует — заголовки читаются из него до перезаписи
+3. Ни то ни другое — минимальный заголовок (только размеры и тип данных)
+
+**Синтаксис**:
+```
+tiff2fits.py [--flip] [--header source.fit] input_spec output_spec
+```
+
+**Параметры**:
+- `input_spec` — входные TIFF (файл, маска, нумерованная последовательность, @список)
+- `output_spec` — выходной FITS, нумерованный шаблон (`out0001.fit`) или wildcard (`*.fit`)
+- `--header F` — взять FITS-заголовки из файла F (применяется ко всем выходным)
+- `--flip` — вертикальное отражение (обратное к fits2tiff --flip)
+
+**Примеры**:
+```batch
+:: Обратная конвертация — заголовки берутся из перезаписываемых .fit файлов
+tiff2fits *.tif *.fit
+
+:: С явным указанием источника заголовков
+tiff2fits edited.tif result.fit --header original.fit
+
+:: Пакетная конвертация с нумерацией
+tiff2fits img0001.tif out0001.fit --header reference.fit
+```
+
+**Типичный workflow** (Photoshop):
+```batch
+:: 1. Экспорт в TIFF
+fits2tiff *.fit *.tif
+
+:: 2. Редактирование в Photoshop, сохранение .tif
+
+:: 3. Импорт обратно — заголовки подхватятся из существующих .fit
+tiff2fits *.tif *.fit
+```
+
+---
+
 ### fft_align.py
 
 **Назначение**: FFT-выравнивание кадров (поворот, масштаб, субпиксельный сдвиг).
@@ -830,6 +928,7 @@ fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2
 - scipy (fft_align, autoflat, autosolve)
 - reproject (autosolve ректификация)
 - astrometry.net (autosolve решение)
+- Pillow (fits2tiff)
 
 ---
 
