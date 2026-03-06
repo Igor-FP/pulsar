@@ -80,6 +80,13 @@ def print_usage():
         "               and local noon-to-noon periods.\n"
         "  --debug      Save downscaled test images to ./debug/ folder for inspection.\n"
         "               Creates subfolders per session with divided previews.\n"
+        "  --selection  Use manually selected flats from debug folder.\n"
+        "               Workflow:\n"
+        "               1. Run with --debug --bestflat first\n"
+        "               2. Review debug/<session>/ folders\n"
+        "               3. Delete unwanted hp_*.fit files, keep exactly ONE per session\n"
+        "               4. Run with --selection to recalibrate using your choices\n"
+        "               Incompatible with --bestflat, --flatlog.\n"
         "  --flat-future-days N\n"
         "               Max days in future to accept a flat (default: 2).\n"
         "               Allows using flats taken shortly after observations\n"
@@ -112,9 +119,34 @@ def print_usage():
     )
 
 
+def print_selection_instructions():
+    """Print instructions for using --selection mode."""
+    print("\n" + "=" * 70)
+    print("MANUAL FLAT SELECTION MODE")
+    print("=" * 70)
+    print("""
+To use --selection, follow these steps:
+
+1. First run with --debug --bestflat:
+   autocalibrate.py --debug --bestflat raw.fit out dark/ flat/
+
+2. Review the debug/<session>/ folders (e.g., debug/2026_01_29_L/)
+   Each folder contains preview files:
+   - hp_flat_xxx_YYYYMMDD_sigmaNN.N.fit      (candidate)
+   - hp_flat_xxx_YYYYMMDD_sigmaNN.N_best.fit (auto-selected)
+
+3. Delete unwanted files, keep exactly ONE hp_*.fit per session folder
+
+4. Run with --selection:
+   autocalibrate.py --selection raw.fit out dark/ flat/
+""")
+    print("=" * 70 + "\n")
+
+
 def parse_args(argv):
     bestflat = False
     debug = False
+    selection = False
     flat_future_days = 2.0
     flatlog = None
     args = argv[1:]
@@ -126,6 +158,9 @@ def parse_args(argv):
             args = args[1:]
         elif args[0] == "--debug":
             debug = True
+            args = args[1:]
+        elif args[0] == "--selection":
+            selection = True
             args = args[1:]
         elif args[0] == "--flat-future-days":
             if len(args) < 2:
@@ -151,6 +186,22 @@ def parse_args(argv):
             print_usage()
             sys.exit(1)
 
+    # Check --selection incompatibilities
+    if selection:
+        if bestflat:
+            print("ERROR: --selection is incompatible with --bestflat")
+            print_selection_instructions()
+            sys.exit(1)
+        if flatlog:
+            print("ERROR: --selection is incompatible with --flatlog")
+            print_selection_instructions()
+            sys.exit(1)
+        if debug:
+            print("ERROR: --selection is incompatible with --debug")
+            print("       (--debug is for generating previews, --selection uses them)")
+            print_selection_instructions()
+            sys.exit(1)
+
     if len(args) < 4:
         print_usage()
         sys.exit(1)
@@ -167,7 +218,7 @@ def parse_args(argv):
         print(f"ERROR: flat_path is not a directory: {flat_path}")
         sys.exit(1)
 
-    return raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog
+    return raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection
 
 
 def read_list_file(path):
@@ -349,6 +400,11 @@ def load_flats(flat_path):
             if jd is None:
                 sys.stderr.write(f"WARNING: Flat '{path}' has no JD, skipped.\n")
                 continue
+            jd = float(jd)
+            # JD must be realistic (> 2400000 = ~1858 AD)
+            if jd < 2400000:
+                sys.stderr.write(f"WARNING: Flat '{path}' has invalid JD={jd}, skipped.\n")
+                continue
 
             # Compute multiplier as fast median of the flat
             mult = batch_utils.fast_median(data)
@@ -360,7 +416,7 @@ def load_flats(flat_path):
                 "path": path,
                 "data": data,
                 "filter": flt,
-                "jd": float(jd),
+                "jd": jd,
                 "mult": mult,
             })
 
@@ -371,6 +427,168 @@ def load_flats(flat_path):
     return flats
 
 
+def build_flat_key(flat):
+    """
+    Build unique key for a flat based on filename and date.
+
+    Returns: "{basename}_{YYYYMMDD}" e.g. "flat_l_20251221"
+    """
+    basename = os.path.splitext(os.path.basename(flat["path"]))[0]
+    date_str = jd_to_local_datetime(flat["jd"]).strftime("%Y%m%d")
+    return f"{basename}_{date_str}"
+
+
+def build_flat_lookup(flats):
+    """
+    Build lookup dictionary for flats by their keys.
+
+    Returns: dict {key: flat}
+    """
+    lookup = {}
+    for flat in flats:
+        key = build_flat_key(flat)
+        lookup[key] = flat
+    return lookup
+
+
+def parse_debug_filename(filename):
+    """
+    Parse debug filename to extract flat key.
+
+    Input: "hp_flat_l_20251221_sigma40.2.fit" or "hp_flat_l_20251221_sigma28.8_best.fit"
+    Returns: "flat_l_20251221" (the flat key)
+    """
+    # Remove extension
+    name = os.path.splitext(filename)[0]
+
+    # Remove hp_ prefix
+    if not name.startswith("hp_"):
+        return None
+    name = name[3:]  # Remove "hp_"
+
+    # Remove _best suffix if present
+    if name.endswith("_best"):
+        name = name[:-5]
+
+    # Remove _sigmaNNN.N suffix
+    # Find last occurrence of _sigma
+    sigma_idx = name.rfind("_sigma")
+    if sigma_idx == -1:
+        return None
+
+    return name[:sigma_idx]
+
+
+def parse_session_dir_name(dirname):
+    """
+    Parse session directory name to extract session_key and filter.
+
+    Input: "2026_01_29_L"
+    Returns: ("2026-01-29", "L")
+    """
+    # Format: YYYY_MM_DD_FILTER
+    parts = dirname.split("_")
+    if len(parts) < 4:
+        return None, None
+
+    # First 3 parts are date
+    try:
+        year = parts[0]
+        month = parts[1]
+        day = parts[2]
+        session_key = f"{year}-{month}-{day}"
+        # Rest is filter (may contain underscores)
+        filter_name = "_".join(parts[3:])
+        return session_key, filter_name
+    except Exception:
+        return None, None
+
+
+def parse_selection_from_debug(debug_dir, flats):
+    """
+    Parse manually selected flats from debug folder structure.
+
+    Args:
+        debug_dir: path to debug folder
+        flats: list of flat dictionaries from scan_tree_flats
+
+    Returns:
+        dict {(filter, session_key): flat} - selected flat for each session
+        (same key format as session_flat_map in build_jobs)
+
+    Raises:
+        SystemExit if any session has != 1 file or flat not found
+    """
+    if not os.path.isdir(debug_dir):
+        print(f"ERROR: Debug folder not found: {debug_dir}")
+        print_selection_instructions()
+        sys.exit(1)
+
+    # Build flat lookup
+    flat_lookup = build_flat_lookup(flats)
+
+    selection = {}
+    errors = []
+
+    # Scan session subdirectories
+    for entry in os.listdir(debug_dir):
+        subdir = os.path.join(debug_dir, entry)
+        if not os.path.isdir(subdir):
+            continue
+
+        # Parse session directory name
+        session_key, filter_name = parse_session_dir_name(entry)
+        if session_key is None:
+            continue  # Not a session directory
+
+        # Find hp_*.fit files in this directory
+        hp_files = [f for f in os.listdir(subdir)
+                    if f.startswith("hp_") and f.lower().endswith((".fit", ".fits", ".fts"))]
+
+        if len(hp_files) == 0:
+            errors.append(f"Session {entry}: no hp_*.fit files found")
+            continue
+
+        if len(hp_files) > 1:
+            errors.append(f"Session {entry}: found {len(hp_files)} files, need exactly 1:\n" +
+                         "\n".join(f"  - {f}" for f in hp_files))
+            continue
+
+        # Parse the single file to get flat key
+        hp_file = hp_files[0]
+        flat_key = parse_debug_filename(hp_file)
+        if flat_key is None:
+            errors.append(f"Session {entry}: cannot parse filename '{hp_file}'")
+            continue
+
+        # Find flat in library
+        if flat_key not in flat_lookup:
+            errors.append(f"Session {entry}: flat not found in library\n"
+                         f"  File: {hp_file}\n"
+                         f"  Key: {flat_key}\n"
+                         f"  (Flat may have been removed from library)")
+            continue
+
+        flat = flat_lookup[flat_key]
+        # Use (filter, session_key) format to match session_flat_map in build_jobs
+        selection[(filter_name, session_key)] = flat
+        print(f"Selection: {entry} -> {os.path.basename(flat['path'])}")
+
+    if errors:
+        print("\n" + "=" * 70)
+        print("ERRORS IN MANUAL SELECTION")
+        print("=" * 70)
+        for err in errors:
+            print(f"\n{err}")
+        print_selection_instructions()
+        sys.exit(1)
+
+    if not selection:
+        print("ERROR: No valid selections found in debug folder")
+        print_selection_instructions()
+        sys.exit(1)
+
+    return selection
 
 
 def clamp_to_dtype(data, dtype):
@@ -940,7 +1158,7 @@ def sanitize_filter_for_name(f):
     return f or "L"
 
 
-def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None, flat_future_days=2.0, maintenance_entries=None):
+def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None, flat_future_days=2.0, maintenance_entries=None, selection_map=None):
     """
     Build job list.
 
@@ -962,6 +1180,10 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
     If bestflat=True:
       - Group files by (filter, session) where session is noon-to-noon local time
       - For each group, compute optimal flat by minimizing stddev
+
+    If selection_map is provided:
+      - Use manually selected flats from selection_map
+      - selection_map: {(filter, session_key): flat}
 
     If maintenance_entries is provided:
       - Determine maintenance interval for each observation based on camera
@@ -1028,7 +1250,27 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
         })
 
     # Determine flat selection method
-    if bestflat:
+    if selection_map:
+        # Manual selection mode: verify all sessions are covered
+        missing_sessions = []
+        for info in file_info:
+            key = (info["filter"], info["session"])
+            if key not in selection_map:
+                missing_sessions.append(key)
+
+        if missing_sessions:
+            print("\nERROR: Manual selection missing for sessions:")
+            for flt, sess in sorted(set(missing_sessions)):
+                print(f"  - {sess}_{flt}")
+            print("\nThese sessions have no selected flat in debug folder.")
+            print_selection_instructions()
+            sys.exit(1)
+
+        # Use selection_map directly as session_flat_map
+        # (flat is used directly, no used_L tracking needed)
+        session_flat_map = {k: (v, False) for k, v in selection_map.items()}
+
+    elif bestflat:
         # Group by (filter, session)
         groups = {}
         for i, info in enumerate(file_info):
@@ -1125,7 +1367,7 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
         src_dtype = info["src_dtype"]
         session_key = info["session"]
 
-        if bestflat:
+        if selection_map or bestflat:
             flat, used_L = session_flat_map[(flt, session_key)]
         else:
             maintenance_interval = info.get("maintenance_interval")
@@ -1248,9 +1490,11 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
 
-    raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog = parse_args(argv)
+    raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection = parse_args(argv)
 
-    if bestflat:
+    if selection:
+        print("Mode: --selection (using manually selected flats from debug folder)")
+    elif bestflat:
         print("Mode: --bestflat (auto-select optimal flat per session)")
 
     # Setup debug directory if requested
@@ -1289,9 +1533,17 @@ def main(argv=None):
     darks = load_darks(dark_path)
     flats = load_flats(flat_path)
 
+    # Load manual selection if --selection mode
+    selection_map = None
+    if selection:
+        selection_debug_dir = os.path.join(os.getcwd(), "debug")
+        print(f"Loading manual selection from: {selection_debug_dir}")
+        selection_map = parse_selection_from_debug(selection_debug_dir, flats)
+        print(f"Loaded {len(selection_map)} session selection(s)")
+
     # Build jobs (per-file DARK/FLAT selection, output names)
     try:
-        jobs = build_jobs(raw_files, out_spec, darks, flats, bestflat, debug_dir, flat_future_days, maintenance_entries)
+        jobs = build_jobs(raw_files, out_spec, darks, flats, bestflat, debug_dir, flat_future_days, maintenance_entries, selection_map)
     except Exception as e:
         print(f"ERROR while preparing jobs: {e}")
         sys.exit(1)

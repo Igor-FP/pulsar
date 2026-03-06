@@ -29,6 +29,8 @@ A toolkit for batch processing of astronomical FITS images.
 | **darkopt.py** | Optimized dark subtraction (K coefficient fitting) |
 | **sortfits.py** | FITS sorting by time, session splitting |
 | **autosolve.py** | Astrometric solving (WCS), reprojection, alignment |
+| **fits2tiff.py** | FITS to TIFF conversion (8/16/32-bit) |
+| **tiff2fits.py** | TIFF to FITS conversion (with header recovery) |
 | **fft_align.py** | FFT-based frame alignment (rotation, scale, shift) |
 
 ---
@@ -789,6 +791,102 @@ autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.
 
 ---
 
+### fits2tiff.py
+
+**Purpose**: Convert FITS images to TIFF format.
+
+**Features**:
+- Selectable bit depth: 8-bit (stretch), 16-bit (clamp), 32-bit float (normalized to [0,1])
+- Auto bit depth detection from FITS data type
+- Wildcard output pattern: `*.tif` preserves input filenames
+- 32-bit float normalized to [0.0, 1.0] for Photoshop compatibility
+
+**Dependencies**: Pillow (`pip install Pillow`)
+
+**Syntax**:
+```
+fits2tiff.py [--bits 8|16|32] [--flip] input_spec output_spec
+```
+
+**Parameters**:
+- `input_spec` — input files (standard formats: file, mask, sequence, @list)
+- `output_spec` — output `.tif`/`.tiff` file, numbered pattern (`out0001.tif`), or wildcard (`*.tif`)
+- `--bits 8` — linear stretch [min,max] → [0,255], uint8
+- `--bits 16` — clamp to [0,65535], uint16
+- `--bits 32` — normalize [min,max] → [0.0,1.0], float32
+- (no --bits) — auto: int8/uint8→8, int16/uint16→16, everything else→32
+- `--flip` — vertical flip (FITS bottom-left → TIFF top-left)
+
+**Examples**:
+```bash
+# Single file (auto bit depth)
+fits2tiff image.fit image.tif
+
+# Batch conversion preserving filenames
+fits2tiff *.fit *.tif
+
+# 8-bit for previews
+fits2tiff --bits 8 light0001.fit preview0001.tif
+
+# Numbered output
+fits2tiff --bits 16 *.fit out0001.tif
+```
+
+---
+
+### tiff2fits.py
+
+**Purpose**: Convert TIFF images back to FITS format with header recovery.
+
+**Features**:
+- Automatic header recovery from existing output FITS file being overwritten
+- Explicit header source via `--header`
+- Supports TIFF 8-bit (L), 16-bit (I;16), 32-bit float (F)
+- RGB TIFF automatically converted to grayscale
+
+**Dependencies**: Pillow (`pip install Pillow`)
+
+**Header logic** (priority order):
+1. `--header source.fit` — headers from specified file
+2. Output file already exists — headers read from it before overwriting
+3. Neither — minimal header (dimensions and data type only)
+
+**Syntax**:
+```
+tiff2fits.py [--flip] [--header source.fit] input_spec output_spec
+```
+
+**Parameters**:
+- `input_spec` — input TIFF files (file, mask, numbered sequence, @list)
+- `output_spec` — output FITS file, numbered pattern (`out0001.fit`), or wildcard (`*.fit`)
+- `--header F` — take FITS headers from file F (applied to all outputs)
+- `--flip` — vertical flip (reverses fits2tiff --flip)
+
+**Examples**:
+```bash
+# Reverse conversion — headers taken from existing .fit files being overwritten
+tiff2fits *.tif *.fit
+
+# With explicit header source
+tiff2fits edited.tif result.fit --header original.fit
+
+# Batch conversion with numbering
+tiff2fits img0001.tif out0001.fit --header reference.fit
+```
+
+**Typical workflow** (Photoshop):
+```bash
+# 1. Export to TIFF
+fits2tiff *.fit *.tif
+
+# 2. Edit in Photoshop, save .tif
+
+# 3. Import back — headers picked up from existing .fit files
+tiff2fits *.tif *.fit
+```
+
+---
+
 ### fft_align.py
 
 **Purpose**: FFT-based frame alignment (rotation, scale, subpixel shift).
@@ -831,6 +929,7 @@ fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2
 - scipy (fft_align, autoflat, autosolve)
 - reproject (autosolve reprojection)
 - astrometry.net (autosolve solving)
+- Pillow (fits2tiff)
 
 ---
 
