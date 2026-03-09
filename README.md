@@ -334,6 +334,7 @@ python Autosolve/autosolve.py input*.fit output_dir/
 | Platform | Status |
 |----------|--------|
 | **Windows 10/11** | Full support (batch wrappers included) |
+| **Windows 7** | Supported (except autosolve.py — requires WSL, available from Windows 10) |
 | **Linux** | Full support (run scripts with python) |
 | **macOS** | Should work (not tested) |
 
