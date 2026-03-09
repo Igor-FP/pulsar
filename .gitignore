@@ -25,6 +25,9 @@ __pycache__/
 # View utility (local only)
 View/
 
+# Personal scripts (not for publishing)
+Personal/
+
 # Claude Code local data
 .claude/
 

@@ -31,7 +31,9 @@ A toolkit for batch processing of astronomical FITS images.
 | **autosolve.py** | Astrometric solving (WCS), reprojection, alignment |
 | **fits2tiff.py** | FITS to TIFF conversion (8/16/32-bit) |
 | **tiff2fits.py** | TIFF to FITS conversion (with header recovery) |
+| **raw2fits.py** | Canon RAW (CR2/CR3) to FITS conversion (raw Bayer CFA) |
 | **fft_align.py** | FFT-based frame alignment (rotation, scale, shift) |
+| **absession.py** | Generate AstroBin acquisition session CSV |
 
 ---
 
@@ -887,6 +889,66 @@ tiff2fits *.tif *.fit
 
 ---
 
+### raw2fits.py
+
+**Purpose**: Convert Canon RAW files (CR2/CR3) to FITS with raw Bayer sensor data.
+
+**Features**:
+- Default mode: raw CFA Bayer mosaic (2D monochrome uint16, original sensor values)
+- Optional `--debaer`: linear demosaicing to 3-channel RGB FITS (uint16)
+- Full EXIF to FITS header mapping (camera, exposure, ISO, date, temperature)
+- Built-in CR3 ISOBMFF parser (no external tools needed for Canon's new format)
+- Canon MakerNote parsing for camera body temperature (CCD-TEMP)
+- Auto dark/light frame detection based on bright pixel fraction
+- Wildcard output pattern: `*.fit` preserves input filenames
+
+**Dependencies**: rawpy (`pip install rawpy`), exifread (`pip install exifread`)
+
+**FITS header mapping**:
+| Source | FITS keyword | Description |
+|--------|-------------|-------------|
+| Make + Model | INSTRUME | Camera make and model |
+| ExposureTime | EXPTIME, EXPOSURE | Exposure time in seconds |
+| ISOSpeedRatings | GAIN | ISO speed |
+| DateTimeOriginal | DATE-OBS | Observation date/time (ISO format) |
+| (from DATE-OBS) | JD | Julian Date |
+| Canon ShotInfo | CCD-TEMP | Camera body temperature (Celsius) |
+| raw_pattern | BAYERPAT | Bayer pattern (e.g. RGGB) |
+| (auto-detect) | IMAGETYP | "Dark Frame" or "Light Frame" |
+| — | FILTER | "CFA" (raw) or "RGB" (debaer) |
+| black_level_per_channel | BLKLVL_R/G/B/G2 | Per-channel black levels |
+
+**Syntax**:
+```
+raw2fits.py [--debaer] [--debug] input_spec output_spec
+```
+
+**Parameters**:
+- `input_spec` — input RAW files (file, wildcard `*.cr2`, numbered sequence `IMG0001.CR3`, @list.txt)
+- `output_spec` — output FITS file, numbered pattern (`out0001.fit`), or wildcard (`*.fit`)
+- `--debaer` — demosaic (debayer) to linear RGB instead of raw CFA
+- `--debug` — write detailed diagnostic log (`<input_name>.log`) for each file
+
+**Examples**:
+```bash
+# Single file
+raw2fits IMG_0001.CR2 test.fit
+
+# Batch — preserve filenames
+raw2fits *.cr3 *.fit
+
+# Numbered output
+raw2fits IMG0001.CR3 out0001.fit
+
+# Demosaiced RGB
+raw2fits --debaer *.cr3 *.fit
+
+# Debug mode (creates .log files)
+raw2fits --debug IMG_0001.CR3 test.fit
+```
+
+---
+
 ### fft_align.py
 
 **Purpose**: FFT-based frame alignment (rotation, scale, subpixel shift).
@@ -918,6 +980,102 @@ fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2
 
 ---
 
+### absession.py
+
+**Purpose**: Generate AstroBin-compatible CSV acquisition session list from FITS files.
+
+**Features**:
+- Recursive directory scanning for FITS files
+- Two modes: FITS header reading (default) or filename parsing (`--parsename`, no dependencies)
+- Session date from DATE-OBS header (or file mtime as fallback); pre-noon files count as previous evening
+- Grouping by date, filter, and exposure time
+- CSV output compatible with AstroBin's CSV import format
+- Summary statistics per filter
+
+**Dependencies**: astropy (default mode), none (`--parsename` mode)
+
+**AstroBin Filter IDs**:
+
+> **IMPORTANT:** The filter IDs in the script are EXAMPLES. You MUST edit the
+> `ASTROBIN_FILTER_IDS` dictionary in `absession.py` to match YOUR filters
+> on AstroBin. Search for your filter at:
+> `https://app.astrobin.com/equipment/explorer/filter?page=1`
+> The ID is the number in the filter page URL, e.g.:
+> `.../filter/4388/filter-name-...` → ID = 4388
+
+| Filter | ID (example) |
+|--------|--------------|
+| L | 5652 |
+| R | 5656 |
+| G | 5646 |
+| B | 5642 |
+| Ha | 4388 |
+| SII | 4396 |
+| OIII | 4392 |
+
+**Syntax**:
+```
+absession.py [options] [directory]
+```
+
+**Parameters**:
+- `directory` — path to scan (default: current directory)
+- `--parsename` — extract filter and exposure from filenames (no dependencies)
+- `--out FILE` — write CSV to file (default: stdout)
+- `--flat` — do not recurse into subdirectories
+
+**Filename convention (`--parsename` mode)**:
+```
+Name_Type_FILTER_SeqNum_Binning_EXPOSURE_Temp.fit
+
+Example: NGC253_L_R_54205_Bin1x1_120s_-10C.fit
+         |      | | |     |      |    |
+         |      | | |     |      |    +-- temperature (ignored)
+         |      | | |     |      +------ exposure: 120 seconds
+         |      | | |     +------------- binning (ignored)
+         |      | | +------------------- sequence number (ignored)
+         |      | +--------------------- FILTER: R, G, B, L, Ha, SII, OIII
+         |      +----------------------- exposure type (ignored)
+         +------------------------------ object name
+
+Mosaic variant (panel number in object name, e.g. "M8_02"):
+M8_02_L_G_11788_Bin1x1_120s_-10C.fit
+|  |  | | |     |      |    |
+|  |  | | |     |      |    +-- temperature (ignored)
+|  |  | | |     |      +------ exposure: 120 seconds
+|  |  | | |     +------------- binning (ignored)
+|  |  | | +------------------- sequence number (ignored)
+|  |  | +--------------------- FILTER: G
+|  |  +----------------------- exposure type (ignored)
+|  +-------------------------- mosaic panel number (ignored)
++------------------------------ object name
+```
+Detection: 7 fields (excl. extension) = normal frame, 8 fields = mosaic.
+Only FILTER and EXPOSURE fields are used; all others are ignored.
+Configure this naming pattern in APT, N.I.N.A., SGPro, or your imaging capture software.
+
+**Session date logic**: files with DATE-OBS (or mtime) before noon are counted as part of the previous evening's session.
+
+**Examples**:
+```bash
+# Current directory (reads FITS headers)
+absession
+
+# Specific directory
+absession /path/to/NGC3576
+
+# Filename parsing mode (no astropy needed)
+absession --parsename /path/to/data
+
+# Save to file
+absession --out sessions.csv /path/to/data
+
+# Non-recursive
+absession --flat .
+```
+
+---
+
 ## Dependencies
 
 **Required**:
@@ -929,7 +1087,9 @@ fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2
 - scipy (fft_align, autoflat, autosolve)
 - reproject (autosolve reprojection)
 - astrometry.net (autosolve solving)
-- Pillow (fits2tiff)
+- Pillow (fits2tiff, tiff2fits)
+- rawpy (raw2fits)
+- exifread (raw2fits)
 
 ---
 
