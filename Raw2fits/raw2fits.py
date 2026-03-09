@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-raw2fits - Convert Canon RAW (CR2/CR3) files to FITS with raw Bayer data.
+raw2fits - Convert Camera RAW files to FITS with raw Bayer data. Currently supports Canon CR2/CR3.
 
 Default mode: raw CFA Bayer mosaic (2D uint16, no processing).
 With --debaer: linear demosaicing to 3-channel RGB FITS (uint16).
