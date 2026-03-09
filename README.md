@@ -140,6 +140,10 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 - FFT alignment with subpixel accuracy
 - Rotation and scale correction
 
+### Conversion
+- Canon RAW (CR2/CR3) to FITS with full EXIF mapping and Bayer CFA preservation
+- FITS to TIFF (8/16/32-bit) and TIFF back to FITS with header recovery
+
 ### Utilities
 - Time-based sorting with session splitting
 - Hot pixel list generation
@@ -165,7 +169,7 @@ python Add/add.py --help
 ### Dependencies
 
 ```bash
-pip install numpy astropy scipy reproject
+pip install numpy astropy scipy reproject Pillow rawpy exifread
 ```
 
 For astrometry (autosolve.py), [astrometry.net](http://astrometry.net/) is required (via WSL on Windows, native on Linux).
@@ -224,6 +228,9 @@ autosolve --rectify --align *.fit aligned\
 | **darkopt.py** | Optimized dark subtraction |
 | **sortfits.py** | Time-based sorting |
 | **autosolve.py** | Astrometry and reprojection |
+| **fits2tiff.py** | FITS to TIFF conversion |
+| **tiff2fits.py** | TIFF to FITS conversion |
+| **raw2fits.py** | Canon RAW (CR2/CR3) to FITS conversion |
 | **fft_align.py** | FFT-based alignment |
 
 Full documentation: **[SCRIPTS.md](SCRIPTS-english.md)** (English) | **[SCRIPTS.md](SCRIPTS.md)** (Russian)
@@ -291,6 +298,9 @@ PULSAR/
 ├── DarkOpt/           # darkopt.py
 ├── SortFits/          # sortfits.py
 ├── Autosolve/         # autosolve.py
+├── Fits2tiff/         # fits2tiff.py
+├── Tiff2fits/         # tiff2fits.py
+├── Raw2fits/          # raw2fits.py
 ├── FFT_Align/         # fft_align.py
 ├── Samples*/          # Test data
 ├── SCRIPTS.md         # Detailed documentation (Russian)
