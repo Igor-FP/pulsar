@@ -168,19 +168,28 @@ git clone https://github.com/Igor-FP/pulsar.git
 cd pulsar
 ```
 
-### Step 2 — Install Python dependencies
+### Step 2 — Install dependencies
 
-#### Install all at once (recommended)
+#### Windows — one-click installer (recommended)
+
+Double-click **`setup.bat`** in the project root. It will:
+- Check Python version (3.6+)
+- Install pip if missing
+- Install all Python dependencies
+- Add commands to PATH
+
+That's it — everything is ready to use.
+
+#### Manual install (Linux / macOS / advanced)
 
 ```bash
 pip install -r requirements.txt
 ```
 
-This installs everything needed for all scripts.
+On Linux/macOS, run scripts directly: `python Add/add.py --help`
 
-#### Or install selectively
-
-If you only need specific scripts and want a minimal install:
+<details>
+<summary>Selective install (minimal)</summary>
 
 ```bash
 pip install numpy astropy              # required — core functionality
@@ -190,18 +199,20 @@ pip install rawpy exifread             # raw2fits (CR2 fallback reader)
 pip install reproject                  # autosolve (WCS reprojection)
 pip install opencv-python              # debayer (--method vng)
 ```
+</details>
 
-### Step 3 — Add commands to PATH (Windows)
+### Step 3 — Add commands to PATH (manual, Windows only)
 
+> **Note:** If you used `setup.bat`, this step is already done.
+
+To add commands to PATH without the full installer:
 ```batch
 Commands\setup.bat
 ```
 
-On Linux, run scripts directly: `python Add/add.py --help`
-
 ### Step 4 — astrometry.net (optional, for autosolve.py)
 
-Only needed if you use astrometric solving. On Windows requires WSL:
+Only needed if you use astrometric solving. On Windows requires WSL (Windows 10+):
 
 ```bash
 # Install WSL (PowerShell as Administrator):
@@ -244,7 +255,7 @@ python Med/med.py calibrated*.fit stacked.fit
 python Autosolve/autosolve.py --rectify --align *.fit aligned/
 ```
 
-On Windows with setup.bat, commands are available directly:
+On Windows after running `setup.bat`, commands are available directly:
 ```batch
 makedark C:\Darks
 makeflat C:\Flats
@@ -368,6 +379,7 @@ PULSAR/
 ├── Mtf/               # mtf.py
 ├── Rgbbalance/        # rgbbalance.py
 ├── Samples*/          # Test data
+├── setup.bat          # Windows one-click installer
 ├── SCRIPTS.md         # Detailed documentation (Russian)
 ├── CLAUDE.md          # AI assistant instructions
 ├── requirements.txt   # Python dependencies

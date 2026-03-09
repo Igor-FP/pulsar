@@ -1140,12 +1140,11 @@ absession --flat .
 
 ## Installation
 
-1. Run `Commands/setup.bat` to add Commands folder to PATH
-2. After that scripts are available as commands: `add`, `sub`, `med`, `calibrate`, etc.
+**Windows — one-click installer:** run `setup.bat` in the project root. It checks Python, installs dependencies, and adds commands to PATH.
 
-```bash
-Commands\setup.bat
-```
+**PATH only (no dependency install):** run `Commands\setup.bat` to add the Commands folder to PATH.
+
+After that, scripts are available as commands: `add`, `sub`, `med`, `calibrate`, etc.
 
 On Linux, run scripts directly with python:
 ```bash
