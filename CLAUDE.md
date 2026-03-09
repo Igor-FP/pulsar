@@ -79,6 +79,14 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | fits2tiff.py | FITS to TIFF conversion (8/16/32-bit) |
 | tiff2fits.py | TIFF to FITS conversion (with header recovery) |
 | fft_align.py | FFT-based image alignment |
+| raw2fits.py | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
+| absession.py | AstroBin acquisition session CSV generator |
+| binxy.py | Software 2×2 / 4×4 pixel binning |
+| crop.py | Crop FITS images (by size/center or margins) |
+| debayer.py | Demosaic Bayer-pattern FITS to RGB |
+| hotfix.py | Remove single hot (and cold) pixels |
+| mtf.py | Midtone Transfer Function (PixInsight-compatible) |
+| rgbbalance.py | RGB color balance and brightness normalization |
 
 ## Dependencies
 

@@ -31,9 +31,15 @@ A toolkit for batch processing of astronomical FITS images.
 | **autosolve.py** | Astrometric solving (WCS), reprojection, alignment |
 | **fits2tiff.py** | FITS to TIFF conversion (8/16/32-bit) |
 | **tiff2fits.py** | TIFF to FITS conversion (with header recovery) |
-| **raw2fits.py** | Canon RAW (CR2/CR3) to FITS conversion (raw Bayer CFA) |
+| **raw2fits.py** | Camera RAW to FITS conversion (raw Bayer CFA, currently Canon CR2/CR3) |
 | **fft_align.py** | FFT-based frame alignment (rotation, scale, shift) |
 | **absession.py** | Generate AstroBin acquisition session CSV |
+| **binxy.py** | Software 2×2 / 4×4 pixel binning |
+| **crop.py** | Crop FITS images (by size/center or margins) |
+| **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
+| **hotfix.py** | Remove single hot (and cold) pixels |
+| **mtf.py** | Midtone Transfer Function (PixInsight-compatible) |
+| **rgbbalance.py** | RGB color balance and brightness normalization |
 
 ---
 
@@ -791,6 +797,45 @@ autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
 autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
 ```
 
+**Installing astrometry.net (Windows, via WSL)**:
+
+```bash
+# 1. Install WSL (from PowerShell as Administrator):
+wsl --install
+
+# 2. In WSL, install astrometry.net:
+sudo apt update
+sudo apt install astrometry.net
+
+# 3. Download index files (choose based on your field of view):
+#    http://data.astrometry.net/4200/
+#    Files index-42XX.fits — number determines FOV range:
+#      4219 = 00-10'     (narrow field, small sensor / long focal length)
+#      4218 = 10-22'
+#      4217 = 22-44'
+#      4216 = 44'-2°
+#      4215 = 2°-2.8°
+#      4214 = 2.8°-4°
+#      4213 = 4°-5.6°
+#      4212 = 5.6°-8°    (typical full-frame + medium focal length)
+#      4211 = 8°-11°
+#      4210 = 11°-16°
+#      4209 = 16°-22°    (wide-angle lenses)
+#      4208 = 22°-30'
+#      4207 = 30°-40°    (ultra wide-angle)
+#    Download those covering your telescope/lens FOV.
+
+# Example downloads:
+cd /usr/share/astrometry
+sudo wget http://data.astrometry.net/4200/index-4212.fits
+sudo wget http://data.astrometry.net/4200/index-4213.fits
+
+# 4. Verify installation:
+solve-field --help
+```
+
+**Python dependencies**: scipy, reproject (`pip install scipy reproject`)
+
 ---
 
 ### fits2tiff.py
@@ -891,7 +936,7 @@ tiff2fits *.tif *.fit
 
 ### raw2fits.py
 
-**Purpose**: Convert Canon RAW files (CR2/CR3) to FITS with raw Bayer sensor data.
+**Purpose**: Convert Camera RAW files to FITS with raw Bayer sensor data. Currently supports Canon CR2/CR3.
 
 **Features**:
 - Default mode: raw CFA Bayer mosaic (2D monochrome uint16, original sensor values)
@@ -1105,6 +1150,235 @@ Commands\setup.bat
 On Linux, run scripts directly with python:
 ```bash
 python Add/add.py --help
+```
+
+---
+
+### binxy.py
+
+**Purpose**: Software 2×2 / 4×4 pixel binning.
+
+Reduces image dimensions by summing adjacent pixels. Supports 2D (H×W) and 3D (N×H×W) FITS images.
+
+**Syntax**:
+```
+binxy input_spec output_spec --2|--4 [--keep_bitness]
+```
+
+**Parameters**:
+- `--2` — 2×2 binning (reduce dimensions by 2)
+- `--4` — 4×4 binning (two passes of 2×2)
+- `--keep_bitness` — integer: divide sum by 4, keep original dtype (no promotion)
+
+**Behavior by dtype**:
+
+| Input | Operation | Output |
+|-------|-----------|--------|
+| Integer | Sum 2×2 block | Same or promoted if overflow (8→16→32→64) |
+| Integer + `--keep_bitness` | Sum 2×2 → `// 4` | Same as input |
+| Float | Average 2×2 block (×0.25) | Same as input |
+
+Updates headers: `XPIXSZ`, `YPIXSZ`, `XBINNING`, `YBINNING`. Odd dimensions cropped to even.
+
+**Examples**:
+```bash
+# 2x2 binning
+binxy img0001.fit out0001.fit --2
+
+# 4x4 binning (sequence)
+binxy img0001.fit out0001.fit --4
+
+# 2x2, keep original dtype (integer divide by 4)
+binxy img0001.fit out0001.fit --2 --keep_bitness
+```
+
+---
+
+### crop.py
+
+**Purpose**: Crop FITS images by size/center or margins.
+
+Two modes: fixed output size with center point, or trim margins from edges. Supports auto-centering on the brightest object. Out-of-bounds regions are zero-padded.
+
+**Syntax**:
+```
+crop input_spec output_spec [options]
+```
+
+**Mode 1 — Crop to size**:
+- `--width WW` — output width in pixels
+- `--height HH` — output height in pixels
+- `--center XX YY` — center point (default: image center)
+- `--autocenter [P]` — auto-detect center by brightness (P = threshold, default 50)
+- `--positions FILE` — per-file centers from CSV
+
+**Positions CSV format**:
+```
+filename,cx,cy
+009A7220.fit,1960,1091
+009A7221.fit,1960,1091
+```
+Extra columns (e.g. `radius`) are ignored.
+
+**Mode 2 — Trim margins**:
+- `--top N`, `--bottom N`, `--left N`, `--right N` — pixels to trim
+
+**Examples**:
+```bash
+# Crop 1000x1000 from image center
+crop img.fit out.fit --width 1000 --height 1000
+
+# Crop around specific point
+crop img.fit out.fit --width 1000 --height 1000 --center 3000 2000
+
+# Auto-center on brightest object
+crop img.fit out.fit --width 1000 --height 1000 --autocenter
+
+# Trim margins
+crop img0001.fit out0001.fit --top 100 --bottom 100 --left 200 --right 200
+```
+
+---
+
+### debayer.py
+
+**Purpose**: Demosaic Bayer-pattern FITS images to 3-channel RGB.
+
+Input: 2D monochrome FITS with CFA Bayer pattern (H×W).
+Output: 3-channel RGB FITS (3×H×W).
+
+**Syntax**:
+```
+debayer input_spec output_spec [--pattern PAT] [--method METHOD]
+```
+
+**Parameters**:
+- `--pattern PAT` — Bayer pattern: RGGB, BGGR, GRBG, GBRG (default: from BAYERPAT header or RGGB)
+- `--method METHOD` — demosaicing algorithm
+
+**Methods**:
+
+| Method | Quality | Speed | Dependency |
+|--------|---------|-------|------------|
+| `bilinear` | Basic | Fast | None (numpy) |
+| `vng` | High (VNG) | Moderate | OpenCV (`pip install opencv-python`) |
+
+**Examples**:
+```bash
+# Default (bilinear, pattern from header)
+debayer img0001.fit out0001.fit
+
+# VNG with explicit pattern
+debayer *.fit rgb/ --method vng --pattern RGGB
+```
+
+---
+
+### hotfix.py
+
+**Purpose**: Remove single hot (and cold) pixels from FITS images.
+
+For each pixel, computes mean and std of its 8 neighbors. If the pixel exceeds `mean + N*sigma`, replaces it with the neighbor mean. Stars are preserved: their PSF spans multiple pixels, so neighbors are also bright. Fully vectorized (no Python pixel loops). Supports 2D and 3D FITS.
+
+**Syntax**:
+```
+hotfix input_spec output_spec [options]
+```
+
+**Parameters**:
+- `--sigma N` — detection threshold in standard deviations (default 5)
+- `--floor N` — minimum noise level in ADU (default: auto)
+- `--cold` — also fix cold (dead) pixels below `mean - N*sigma`
+- `--debug` — diagnostic output for the first file
+
+**Examples**:
+```bash
+# Default (5 sigma, hot only)
+hotfix img0001.fit out0001.fit
+
+# Stricter threshold
+hotfix *.fit fixed/ --sigma 7
+
+# Fix both hot and cold pixels
+hotfix img0001.fit out0001.fit --sigma 4 --cold
+```
+
+---
+
+### mtf.py
+
+**Purpose**: Midtone Transfer Function (as in PixInsight PixelMath).
+
+Applies a nonlinear tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
+
+The curve passes through (0,0), (m, 0.5), (1,1) where m is the midtones balance.
+Pixel values are normalized to [0,1] using dtype's full range (uint16: 0..65535).
+Supports 2D and 3D FITS images.
+
+**Syntax**:
+```
+mtf input_spec output_spec K [options]
+```
+
+**Parameters**:
+- `K` — midtones balance (0..1). K<0.5 brightens, K=0.5 identity, K>0.5 darkens
+- `--preserve_color` — color images: MTF on per-pixel average, scale R/G/B proportionally
+- `--k2 K2` — second MTF parameter for dual-MTF blending
+- `--blend B` — blend factor (0.0 = only K, 1.0 = only K2, default 0.5)
+
+**Examples**:
+```bash
+# Brighten midtones
+mtf img0001.fit out0001.fit 0.2
+
+# Color-preserving stretch
+mtf img0001.fit out0001.fit 0.25 --preserve_color
+
+# Dual MTF blending
+mtf img.fit out.fit 0.15 --k2 0.45 --blend 0.3
+```
+
+---
+
+### rgbbalance.py
+
+**Purpose**: RGB color balance and brightness normalization for color FITS.
+
+Neutralizes background color, applies white balance (auto or manual), and normalizes brightness across a sequence of frames. Input: 3-channel RGB FITS (3×H×W).
+
+**Syntax**:
+```
+rgbbalance input_spec output_spec [options]
+```
+
+**Parameters**:
+- `--auto [file]` — auto white balance: scale R & B to match Green channel range. Reference from file (default: first input)
+- `--autoeach` — auto white balance computed independently per file
+- `--rgb R G B` — manual per-channel scaling coefficients
+- `--kmin N` — percent of darkest pixels for black level estimation (default 5)
+- `--kmax N` — percent of brightest pixels for white level estimation (default 5)
+
+`--rgb`, `--auto`, `--autoeach` are mutually exclusive. Without any — only background neutralization and inter-frame brightness normalization.
+
+**Algorithm**:
+1. Quantile medians for each channel (bottom kmin%, top kmax%)
+2. Black neutralization: shift channels to average min_median
+3. Color balance around black point (auto: `K_R = range_G/range_R`)
+4. Brightness normalization between frames
+
+**Examples**:
+```bash
+# Auto white balance
+rgbbalance img0001.fit out0001.fit --auto
+
+# Auto white balance, specific reference
+rgbbalance img0001.fit out0001.fit --auto ref.fit
+
+# Manual coefficients
+rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5
+
+# Only background + brightness normalization
+rgbbalance img0001.fit out0001.fit
 ```
 
 ---

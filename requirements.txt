@@ -1,0 +1,16 @@
+# PULSAR (AstroBatch) — Python dependencies
+# Install: pip install -r requirements.txt
+
+# === Required (used by most scripts) ===
+numpy
+astropy
+
+# === Recommended (used by several scripts) ===
+scipy                   # autocalibrate, autoflat, autosolve, fft_align, crop
+
+# === Optional (install as needed) ===
+Pillow                  # fits2tiff, tiff2fits — TIFF image conversion
+rawpy                   # raw2fits — CR2 fallback reader (CR3 uses built-in parser)
+exifread                # raw2fits — CR2 EXIF fallback (CR3 uses built-in parser)
+reproject               # autosolve — WCS reprojection (--rect-method reproject)
+opencv-python           # debayer — VNG demosaicing (--method vng)

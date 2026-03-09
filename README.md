@@ -141,7 +141,7 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 - Rotation and scale correction
 
 ### Conversion
-- Canon RAW (CR2/CR3) to FITS with full EXIF mapping and Bayer CFA preservation
+- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (Canon CR2/CR3)
 - FITS to TIFF (8/16/32-bit) and TIFF back to FITS with header recovery
 
 ### Utilities
@@ -151,28 +151,67 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 
 ---
 
-## Quick Start
+## Installation
 
-### Installation
+### Step 1 — Clone the repository
 
 ```bash
-git clone https://github.com/ichekailin/PULSAR.git
-cd PULSAR
+git clone https://github.com/Igor-FP/pulsar.git
+cd pulsar
+```
 
-# Windows: add Commands to PATH
+### Step 2 — Install Python dependencies
+
+```bash
+# Required (core functionality)
+pip install numpy astropy
+
+# Recommended (used by several scripts)
+pip install scipy
+
+# Optional (install as needed)
+pip install Pillow           # fits2tiff, tiff2fits
+pip install rawpy exifread   # raw2fits (CR2 fallback)
+pip install reproject        # autosolve (WCS reprojection)
+pip install opencv-python    # debayer (VNG method)
+
+# Or install everything at once:
+pip install -r requirements.txt
+```
+
+### Step 3 — Add commands to PATH (Windows)
+
+```batch
 Commands\setup.bat
-
-# Linux: run scripts directly with python
-python Add/add.py --help
 ```
 
-### Dependencies
+On Linux, run scripts directly: `python Add/add.py --help`
+
+### Step 4 — astrometry.net (optional, for autosolve.py)
+
+Only needed if you use astrometric solving. On Windows requires WSL:
 
 ```bash
-pip install numpy astropy scipy reproject Pillow rawpy exifread
+# Install WSL (PowerShell as Administrator):
+wsl --install
+
+# In WSL:
+sudo apt update
+sudo apt install astrometry.net
+
+# Download index files for your FOV (http://data.astrometry.net/4200/):
+#   4216 = 44'-2°    4213 = 4°-5.6°    4210 = 11°-16°
+#   4215 = 2°-2.8°   4212 = 5.6°-8°    4209 = 16°-22°
+#   4214 = 2.8°-4°   4211 = 8°-11°     4207 = 30°-40°
+cd /usr/share/astrometry
+sudo wget http://data.astrometry.net/4200/index-4212.fits
 ```
 
-For astrometry (autosolve.py), [astrometry.net](http://astrometry.net/) is required (via WSL on Windows, native on Linux).
+See [SCRIPTS.md](SCRIPTS-english.md) for the full index file reference.
+
+---
+
+## Quick Start
 
 ### Usage Examples
 
@@ -230,8 +269,15 @@ autosolve --rectify --align *.fit aligned\
 | **autosolve.py** | Astrometry and reprojection |
 | **fits2tiff.py** | FITS to TIFF conversion |
 | **tiff2fits.py** | TIFF to FITS conversion |
-| **raw2fits.py** | Canon RAW (CR2/CR3) to FITS conversion |
+| **raw2fits.py** | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
 | **fft_align.py** | FFT-based alignment |
+| **absession.py** | AstroBin acquisition session CSV |
+| **binxy.py** | Software 2×2 / 4×4 pixel binning |
+| **crop.py** | Crop FITS images (by size/center or margins) |
+| **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
+| **hotfix.py** | Remove single hot (and cold) pixels |
+| **mtf.py** | Midtone Transfer Function (PixInsight-compatible) |
+| **rgbbalance.py** | RGB color balance and brightness normalization |
 
 Full documentation: **[SCRIPTS.md](SCRIPTS-english.md)** (English) | **[SCRIPTS.md](SCRIPTS.md)** (Russian)
 
@@ -302,9 +348,17 @@ PULSAR/
 ├── Tiff2fits/         # tiff2fits.py
 ├── Raw2fits/          # raw2fits.py
 ├── FFT_Align/         # fft_align.py
+├── Absession/         # absession.py
+├── Binxy/             # binxy.py
+├── Crop/              # crop.py
+├── Debayer/           # debayer.py
+├── Hotfix/            # hotfix.py
+├── Mtf/               # mtf.py
+├── Rgbbalance/        # rgbbalance.py
 ├── Samples*/          # Test data
 ├── SCRIPTS.md         # Detailed documentation (Russian)
 ├── CLAUDE.md          # AI assistant instructions
+├── requirements.txt   # Python dependencies
 └── README.md          # This file
 ```
 
