@@ -121,7 +121,7 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Calibration
 - Dark/bias subtraction with coefficient optimization
 - Flat division with automatic filter-based selection
-- Hot pixel cosmetic correction
+- Hot pixel cosmetic correction (from coordinate list or sigma-based detection)
 - Automatic master dark and master flat creation
 
 ### Arithmetic
@@ -132,22 +132,30 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Stacking
 - Summation with exposure time tracking
 - Median combining (parallel tiled processing)
-- Brightness normalization between frames
+- Brightness normalization between frames (gain, offset, regression)
 
 ### Astrometry and Alignment
-- WCS solving via astrometry.net
+- WCS solving via astrometry.net (WSL on Windows)
 - Reprojection to tangent plane (TAN/gnomonic projection)
 - FFT alignment with subpixel accuracy
 - Rotation and scale correction
+- Crop with autocenter or manual positions from CSV
+
+### Image Processing
+- Midtone Transfer Function — PixInsight-compatible nonlinear stretch
+- RGB color balance and brightness normalization
+- Bayer demosaicing (bilinear and VNG methods)
+- Software pixel binning (2×2, 4×4)
 
 ### Conversion
-- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (Canon CR2/CR3)
-- FITS to TIFF (8/16/32-bit) and TIFF back to FITS with header recovery
+- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (currently Canon CR2/CR3)
+- FITS to TIFF (8/16/32-bit, mono and RGB) and TIFF back to FITS with header recovery
 
 ### Utilities
 - Time-based sorting with session splitting
 - Hot pixel list generation
 - Flat field gradient correction
+- AstroBin acquisition session CSV generator
 
 ---
 
@@ -160,36 +168,51 @@ git clone https://github.com/Igor-FP/pulsar.git
 cd pulsar
 ```
 
-### Step 2 — Install Python dependencies
+### Step 2 — Install dependencies
+
+#### Windows — one-click installer (recommended)
+
+Double-click **`setup.bat`** in the project root. It will:
+- Check Python version (3.6+)
+- Install pip if missing
+- Install all Python dependencies
+- Add commands to PATH
+
+That's it — everything is ready to use.
+
+#### Manual install (Linux / macOS / advanced)
 
 ```bash
-# Required (core functionality)
-pip install numpy astropy
-
-# Recommended (used by several scripts)
-pip install scipy
-
-# Optional (install as needed)
-pip install Pillow           # fits2tiff, tiff2fits
-pip install rawpy exifread   # raw2fits (CR2 fallback)
-pip install reproject        # autosolve (WCS reprojection)
-pip install opencv-python    # debayer (VNG method)
-
-# Or install everything at once:
 pip install -r requirements.txt
 ```
 
-### Step 3 — Add commands to PATH (Windows)
+On Linux/macOS, run scripts directly: `python Add/add.py --help`
 
+<details>
+<summary>Selective install (minimal)</summary>
+
+```bash
+pip install numpy astropy              # required — core functionality
+pip install scipy                      # autocalibrate, autoflat, autosolve, fft_align, crop
+pip install Pillow                     # fits2tiff, tiff2fits
+pip install rawpy exifread             # raw2fits (CR2 fallback reader)
+pip install reproject                  # autosolve (WCS reprojection)
+pip install opencv-python              # debayer (--method vng)
+```
+</details>
+
+### Step 3 — Add commands to PATH (manual, Windows only)
+
+> **Note:** If you used `setup.bat`, this step is already done.
+
+To add commands to PATH without the full installer:
 ```batch
 Commands\setup.bat
 ```
 
-On Linux, run scripts directly: `python Add/add.py --help`
-
 ### Step 4 — astrometry.net (optional, for autosolve.py)
 
-Only needed if you use astrometric solving. On Windows requires WSL:
+Only needed if you use astrometric solving. On Windows requires WSL (Windows 10+):
 
 ```bash
 # Install WSL (PowerShell as Administrator):
@@ -232,7 +255,7 @@ python Med/med.py calibrated*.fit stacked.fit
 python Autosolve/autosolve.py --rectify --align *.fit aligned/
 ```
 
-On Windows with setup.bat, commands are available directly:
+On Windows after running `setup.bat`, commands are available directly:
 ```batch
 makedark C:\Darks
 makeflat C:\Flats
@@ -356,6 +379,7 @@ PULSAR/
 ├── Mtf/               # mtf.py
 ├── Rgbbalance/        # rgbbalance.py
 ├── Samples*/          # Test data
+├── setup.bat          # Windows one-click installer
 ├── SCRIPTS.md         # Detailed documentation (Russian)
 ├── CLAUDE.md          # AI assistant instructions
 ├── requirements.txt   # Python dependencies
