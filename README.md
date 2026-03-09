@@ -170,21 +170,25 @@ cd pulsar
 
 ### Step 2 — Install Python dependencies
 
+#### Install all at once (recommended)
+
 ```bash
-# Required (core functionality)
-pip install numpy astropy
-
-# Recommended (used by several scripts)
-pip install scipy
-
-# Optional (install as needed)
-pip install Pillow           # fits2tiff, tiff2fits
-pip install rawpy exifread   # raw2fits (CR2 fallback)
-pip install reproject        # autosolve (WCS reprojection)
-pip install opencv-python    # debayer (VNG method)
-
-# Or install everything at once:
 pip install -r requirements.txt
+```
+
+This installs everything needed for all scripts.
+
+#### Or install selectively
+
+If you only need specific scripts and want a minimal install:
+
+```bash
+pip install numpy astropy              # required — core functionality
+pip install scipy                      # autocalibrate, autoflat, autosolve, fft_align, crop
+pip install Pillow                     # fits2tiff, tiff2fits
+pip install rawpy exifread             # raw2fits (CR2 fallback reader)
+pip install reproject                  # autosolve (WCS reprojection)
+pip install opencv-python              # debayer (--method vng)
 ```
 
 ### Step 3 — Add commands to PATH (Windows)
