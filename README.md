@@ -121,7 +121,7 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Calibration
 - Dark/bias subtraction with coefficient optimization
 - Flat division with automatic filter-based selection
-- Hot pixel cosmetic correction
+- Hot pixel cosmetic correction (from coordinate list or sigma-based detection)
 - Automatic master dark and master flat creation
 
 ### Arithmetic
@@ -132,22 +132,30 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Stacking
 - Summation with exposure time tracking
 - Median combining (parallel tiled processing)
-- Brightness normalization between frames
+- Brightness normalization between frames (gain, offset, regression)
 
 ### Astrometry and Alignment
-- WCS solving via astrometry.net
+- WCS solving via astrometry.net (WSL on Windows)
 - Reprojection to tangent plane (TAN/gnomonic projection)
 - FFT alignment with subpixel accuracy
 - Rotation and scale correction
+- Crop with autocenter or manual positions from CSV
+
+### Image Processing
+- Midtone Transfer Function — PixInsight-compatible nonlinear stretch
+- RGB color balance and brightness normalization
+- Bayer demosaicing (bilinear and VNG methods)
+- Software pixel binning (2×2, 4×4)
 
 ### Conversion
-- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (Canon CR2/CR3)
-- FITS to TIFF (8/16/32-bit) and TIFF back to FITS with header recovery
+- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (currently Canon CR2/CR3)
+- FITS to TIFF (8/16/32-bit, mono and RGB) and TIFF back to FITS with header recovery
 
 ### Utilities
 - Time-based sorting with session splitting
 - Hot pixel list generation
 - Flat field gradient correction
+- AstroBin acquisition session CSV generator
 
 ---
 
