@@ -202,6 +202,52 @@ def build_io_file_lists(
     return out
 
 
+def build_io_file_lists_from_list(
+    input_files: List[str],
+    output_spec: str
+) -> List[Tuple[str, str]]:
+    """
+    Build list of (input_file, output_file) pairs from an already-expanded
+    list of input files. Same output logic as build_io_file_lists().
+    """
+    if not input_files:
+        raise ValueError("No input files provided.")
+
+    # Directory output
+    is_dir = os.path.isdir(output_spec) or output_spec.endswith(os.sep) or output_spec.endswith('/')
+    if is_dir:
+        out_dir = os.path.abspath(output_spec)
+        os.makedirs(out_dir, exist_ok=True)
+        return [(inp, os.path.join(out_dir, os.path.basename(inp))) for inp in input_files]
+
+    # Single input -> single output
+    if len(input_files) == 1:
+        return [(input_files[0], output_spec)]
+
+    # Multiple inputs => numbered pattern
+    base = os.path.basename(output_spec)
+    m = _SEQ_RE.match(base)
+    if not m:
+        raise ValueError(
+            "Output pattern must contain a numeric field when multiple "
+            "input files are provided (e.g. out0001.fit), or specify a directory."
+        )
+
+    prefix, digits, ext = m.group(1), m.group(2), m.group(3)
+    width = len(digits)
+    start_index = int(digits)
+    out_dir = os.path.dirname(os.path.abspath(output_spec)) or "."
+
+    out: List[Tuple[str, str]] = []
+    idx = start_index
+    for inp in input_files:
+        fname = f"{prefix}{str(idx).zfill(width)}{ext}"
+        out.append((inp, os.path.join(out_dir, fname)))
+        idx += 1
+
+    return out
+
+
 # ---------------------------------------------------------
 # Numeric constant parsing (strict)
 # ---------------------------------------------------------

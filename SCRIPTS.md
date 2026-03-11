@@ -40,6 +40,9 @@
 | **hotfix.py** | Удаление одиночных горячих (и холодных) пикселей |
 | **mtf.py** | Midtone Transfer Function (совместима с PixInsight) |
 | **rgbbalance.py** | Баланс цвета и яркости для RGB FITS |
+| **bestof.py** | Отбор лучших кадров по FWHM (качество атмосферы) |
+| **rgb.py** | Объединение/разделение RGB каналов (3 моно ↔ 1 RGB FITS) |
+| **xisf2fits.py** | Конвертация XISF (PixInsight) в FITS |
 
 ---
 
@@ -146,12 +149,20 @@ sub.py input_spec output_spec operand [offset]
 - `operand` — числовая константа ИЛИ FITS-файл (значение для вычитания)
 - `offset` — опциональное смещение (по умолчанию 0)
 
+**Опции**:
+- `--continuum [snr]` — Режим вычитания континуума. Детектирует звёзды в обоих изображениях, сопоставляет их по координатам (толерантность 1.5 px), и масштабирует вычитаемый кадр так, чтобы яркость звёзд совпала. Звёзды вычитаются в ноль, остаётся только эмиссия (например H-alpha). Порог SNR для детекции звёзд (по умолчанию 38).
+
+**Формула с --continuum**: `result = input - K * operand + offset`, где K = sum(flux_input) / sum(flux_operand) вычислено по фотометрии совпавших звёзд.
+
 **Примеры**:
-```batch
+```bash
 sub light0001.fit dark_sub0001.fit master_dark.fit
 sub raw.fit calibrated.fit dark.fit 100
-sub light0001.fit cal0001.fit 0         :: вычитание нуля (для термостабильных CCD без bias)
-sub light0001.fit cal0001.fit 1024      :: вычитание константы смещения
+sub light0001.fit cal0001.fit 0         # вычитание нуля (для термостабильных CCD без bias)
+sub light0001.fit cal0001.fit 1024      # вычитание константы смещения
+sub ha.fit continuum_sub.fit red.fit --continuum
+sub ha.fit output.fit broadband.fit --continuum 50
+sub ha0001.fit out0001.fit red0001.fit 1000 --continuum   # со смещением
 ```
 
 ---
@@ -751,11 +762,17 @@ sortfits.py input_spec output_pattern [-s|--sessions] [--gap-hours H]
 - `output_pattern` — шаблон выходных имён
 - `-s`, `--sessions` — режим сессий (выходные имена: `<base>_Sssss_Fffff.fit`)
 - `--gap-hours H` — разрыв в часах для разделения сессий (по умолчанию 1.0)
+- `--auto` — режим автоименования: имена выходных файлов по хидерам FITS: `{OBJECT}_exp{TIME}_{FILTER}[_S{SSSS}]_{NNNN}.fit`
+- `--name NAME` — переопределить значение OBJECT (используется с --auto)
+- `--group-num` — нумерация внутри каждой группы с 1 (используется с --auto)
 
 **Примеры**:
 ```batch
 sortfits light0001.fit sorted0001.fit
 sortfits *.fit session.fit --sessions --gap-hours 2
+sortfits *.fit sorted/ --auto
+sortfits *.fit sorted/ --auto --name NGC1097
+sortfits *.fit sorted/ --auto --group-num
 ```
 
 ---
@@ -1158,6 +1175,8 @@ B: 10 x 5 min ( 0h 50m )
 - Pillow (fits2tiff, tiff2fits)
 - rawpy (raw2fits)
 - exifread (raw2fits)
+- sep (bestof, rgbbalance --autostar, sub --continuum)
+- xisf (xisf2fits)
 
 ---
 
@@ -1372,10 +1391,12 @@ rgbbalance input_spec output_spec [options]
 - `--auto [file]` — авто баланс белого: масштаб R и B к диапазону G. Эталон из файла (по умолчанию первый вход)
 - `--autoeach` — авто баланс белого вычисляется независимо для каждого файла
 - `--rgb R G B` — ручные коэффициенты масштабирования каналов
+- `--autostar [file]` — баланс белого по звёздам: детекция звёзд на G канале, кросс-матчинг с R и B (толерантность 1.5 px), апертурная фотометрия, вычисление K по суммарным потокам. Точнее чем `--auto` для узкополосных/широкополосных миксов. Эталон из файла (по умолчанию первый вход)
+- `--snr N` — порог SNR для детекции звёзд в --autostar (по умолчанию 38)
 - `--kmin N` — процент тёмных пикселей для оценки чёрного уровня (по умолчанию 5)
 - `--kmax N` — процент ярких пикселей для оценки белого уровня (по умолчанию 5)
 
-`--rgb`, `--auto`, `--autoeach` взаимоисключающие. Без них — только нейтрализация фона и нормализация яркости.
+`--rgb`, `--auto`, `--autoeach`, `--autostar` взаимоисключающие. Без них — только нейтрализация фона и нормализация яркости.
 
 **Алгоритм**:
 1. Квантильные медианы для каждого канала (нижние kmin%, верхние kmax%)
@@ -1396,6 +1417,100 @@ rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5
 
 :: Только нормализация фона и яркости
 rgbbalance img0001.fit out0001.fit
+
+:: Баланс белого по звёздам
+rgbbalance img.fit out.fit --autostar
+rgbbalance img0001.fit out0001.fit --autostar ref.fit --snr 50
+```
+
+---
+
+### bestof.py
+
+**Назначение**: Отбор лучших кадров по FWHM (качество атмосферы).
+
+Анализирует FWHM звёзд на наборе FITS-изображений с помощью детекции на основе SEP. Может копировать лучшие N% кадров, фильтровать по порогу FWHM и/или записать CSV-отчёт.
+
+**Зависимости**: sep (`pip install sep`)
+
+**Синтаксис**:
+```
+bestof input_spec [output_spec] [опции]
+```
+
+**Режимы отбора** (хотя бы один обязателен, если не указан только --csv):
+- `--best P` — копировать лучшие P процентов кадров (наименьший FWHM), 1-99
+- `--threshold T` — копировать кадры с FWHM <= T пикселей
+
+**Опции**:
+- `--csv FILE` — записать CSV-отчёт: fwhm,filename (отсортировано по FWHM)
+- `--snr N` — порог SNR для детекции звёзд (по умолчанию 10)
+
+**Примеры**:
+```bash
+bestof light0001.fit best0001.fit --best 70
+bestof *.fit selected/ --threshold 3.5
+bestof *.fit --csv report.csv
+bestof *.fit best/ --best 80 --csv report.csv
+```
+
+---
+
+### rgb.py
+
+**Назначение**: Объединение/разделение RGB каналов в FITS-файлах.
+
+Merge: объединяет 3 монохромных 2D FITS (R, G, B) в один 3-канальный RGB FITS (3, H, W).
+Split: извлекает R, G, B каналы из RGB FITS (3, H, W) в 3 монохромных FITS. Прописывает FILTER = R/G/B в хидер каждого канала.
+
+**Синтаксис**:
+```
+rgb --merge inR inG inB --out outRGB
+rgb --split inRGB --out outR outG outB
+```
+
+**Параметры**:
+Все аргументы файлов поддерживают стандартные спецификации: один файл, маска, нумерованная последовательность, @list.txt. Для merge все три входа должны содержать одинаковое количество файлов.
+
+**Примеры**:
+```bash
+# Объединить одиночные файлы
+rgb --merge r.fit g.fit b.fit --out rgb.fit
+
+# Объединить последовательности
+rgb --merge r0001.fit g0001.fit b0001.fit --out rgb0001.fit
+
+# Разделить одиночный файл
+rgb --split rgb.fit --out r.fit g.fit b.fit
+
+# Разделить последовательность
+rgb --split rgb0001.fit --out r0001.fit g0001.fit b0001.fit
+```
+
+---
+
+### xisf2fits.py
+
+**Назначение**: Конвертация XISF (PixInsight) файлов в формат FITS.
+
+Сохраняет данные пикселей как есть (float32/float64/uint16, без конвертации типов). Восстанавливает ключевые слова FITS-хидера из метаданных XISF FITSKeyword. Обрабатывает RGB (конвертация осей HWC→CHW) и монохромные изображения.
+
+**Зависимости**: xisf (`pip install xisf`)
+
+**Синтаксис**:
+```
+xisf2fits input_spec output_spec
+```
+
+**Параметры**:
+- `input_spec` — один файл .xisf, маска (*.xisf), или @list.txt
+- `output_spec` — один файл .fit, нумерованный шаблон (out0001.fit), или директория (outdir/)
+
+**Примеры**:
+```bash
+xisf2fits image.xisf image.fit
+xisf2fits *.xisf converted/
+xisf2fits @list.txt out0001.fit
 ```
 
 ---

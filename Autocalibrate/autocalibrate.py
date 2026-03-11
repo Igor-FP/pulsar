@@ -80,6 +80,7 @@ def print_usage():
         "               and local noon-to-noon periods.\n"
         "  --debug      Save downscaled test images to ./debug/ folder for inspection.\n"
         "               Creates subfolders per session with divided previews.\n"
+        "               Requires --bestflat (no effect without it).\n"
         "  --selection  Use manually selected flats from debug folder.\n"
         "               Workflow:\n"
         "               1. Run with --debug --bestflat first\n"
@@ -151,40 +152,46 @@ def parse_args(argv):
     flatlog = None
     args = argv[1:]
 
-    # Parse options
-    while args and args[0].startswith("--"):
-        if args[0] == "--bestflat":
+    # Parse options (can appear anywhere among arguments)
+    positional = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--bestflat":
             bestflat = True
-            args = args[1:]
-        elif args[0] == "--debug":
+            i += 1
+        elif args[i] == "--debug":
             debug = True
-            args = args[1:]
-        elif args[0] == "--selection":
+            i += 1
+        elif args[i] == "--selection":
             selection = True
-            args = args[1:]
-        elif args[0] == "--flat-future-days":
-            if len(args) < 2:
+            i += 1
+        elif args[i] == "--flat-future-days":
+            if i + 1 >= len(args):
                 print("ERROR: --flat-future-days requires a value")
                 sys.exit(1)
             try:
-                flat_future_days = float(args[1])
+                flat_future_days = float(args[i + 1])
             except ValueError:
-                print(f"ERROR: --flat-future-days must be a number, got: {args[1]}")
+                print(f"ERROR: --flat-future-days must be a number, got: {args[i + 1]}")
                 sys.exit(1)
-            args = args[2:]
-        elif args[0] == "--flatlog":
-            if len(args) < 2:
+            i += 2
+        elif args[i] == "--flatlog":
+            if i + 1 >= len(args):
                 print("ERROR: --flatlog requires a file path")
                 sys.exit(1)
-            flatlog = args[1]
+            flatlog = args[i + 1]
             if not os.path.isfile(flatlog):
                 print(f"ERROR: Flat log file not found: {flatlog}")
                 sys.exit(1)
-            args = args[2:]
-        else:
-            print(f"ERROR: Unknown option: {args[0]}")
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"ERROR: Unknown option: {args[i]}")
             print_usage()
             sys.exit(1)
+        else:
+            positional.append(args[i])
+            i += 1
+    args = positional
 
     # Check --selection incompatibilities
     if selection:

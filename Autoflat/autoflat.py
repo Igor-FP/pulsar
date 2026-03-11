@@ -32,19 +32,23 @@ def parse_args(argv):
     debug = False
     args = argv[1:]
 
-    if args and args[0] == "-d":
-        debug = True
-        args = args[1:]
+    # Separate options from positional arguments
+    positional = []
+    for a in args:
+        if a == "-d":
+            debug = True
+        else:
+            positional.append(a)
 
-    if len(args) not in (2, 3):
+    if len(positional) not in (2, 3):
         usage()
 
-    input_pattern = args[0]
-    output_pattern = args[1]
+    input_pattern = positional[0]
+    output_pattern = positional[1]
 
-    if len(args) == 3:
+    if len(positional) == 3:
         try:
-            poly_order = int(args[2])
+            poly_order = int(positional[2])
             if poly_order < 0:
                 raise ValueError
         except ValueError:
