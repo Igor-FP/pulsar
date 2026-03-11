@@ -20,7 +20,7 @@ from batch_utils import expand_input_spec as bu_expand_input_spec
 def usage():
     sys.stderr.write(
         "Usage:\n"
-        "  sortfits.py input_spec output_pattern [-s|--sessions] [--gap-hours H]\n"
+        "  sortfits.py input_spec output_pattern [options]\n"
         "\n"
         "input_spec:\n"
         "  firstNNNN.fits          numbered sequence starting at NNNN\n"
@@ -29,17 +29,33 @@ def usage():
         "  *.fit, img???.fits      wildcard masks (via batch_utils)\n"
         "\n"
         "output_pattern:\n"
-        "  Without --sessions: must contain a numeric field (e.g. out0001.fit)\n"
-        "  With --sessions:     base name used; files will be named as\n"
-        "                       <basename>_Sssss_Fffff.fit\n"
-        "                       ssss - session number (0001..9999)\n"
-        "                       ffff - frame number in session (0001..9999)\n"
+        "  Without --auto:  must contain a numeric field (e.g. out0001.fit)\n"
+        "  With --auto:     output directory (created if needed)\n"
+        "  With --sessions: base name used; files named as\n"
+        "                   <basename>_Sssss_Fffff.fit\n"
+        "\n"
+        "Modes:\n"
+        "  (default)                numbered rename: out0001.fit, out0002.fit, ...\n"
+        "  -s, --sessions           session/frame numbering: base_S0001_F0001.fit\n"
+        "  --auto                   auto-naming from FITS headers:\n"
+        "                           {OBJECT}_exp{TIME}_{FILTER}[_S{SSSS}]_{NNNN}.fit\n"
         "\n"
         "Options:\n"
-        "  -s, --sessions         enable session/frame numbering mode\n"
+        "  --auto                 auto-name from FITS headers (OBJECT, EXPTIME, FILTER)\n"
+        "  --name NAME            override object name (default: OBJECT header or 'obj')\n"
+        "  --group-num            number within each group instead of globally\n"
+        "  -s, --sessions         enable session splitting (works with --auto too)\n"
         "  --gap-hours H          gap in hours to split sessions (default: 1.0)\n"
         "\n"
+        "Examples:\n"
+        "  sortfits *.fit out0001.fit\n"
+        "  sortfits *.fit out.fit --sessions --gap-hours 2\n"
+        "  sortfits *.fit sorted/ --auto\n"
+        "  sortfits *.fit sorted/ --auto --sessions --name NGC1097\n"
+        "  sortfits *.fit sorted/ --auto --group-num\n"
+        "\n"
     )
+    sys.exit(1)
 
 
 # ---------------- Small helpers ---------------- #
@@ -92,6 +108,17 @@ def _get_float(header, key) -> Optional[float]:
         if v is None:
             return None
         return float(v)
+    except Exception:
+        return None
+
+
+def _get_str(header, key) -> Optional[str]:
+    try:
+        v = header.get(key)
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
     except Exception:
         return None
 
@@ -157,6 +184,46 @@ def extract_mjd(path: str) -> Optional[float]:
     return None
 
 
+def extract_metadata(path: str) -> Tuple[Optional[float], Optional[str], Optional[float]]:
+    """
+    Extract (mjd, filter_name, exptime) from FITS header.
+    """
+    try:
+        with fits.open(path, memmap=True) as hdul:
+            header = hdul[0].header
+    except Exception:
+        return None, None, None
+
+    # MJD
+    mjd = None
+    expmjd = _get_float(header, "EXPMJD")
+    if expmjd is not None:
+        mjd = expmjd
+    else:
+        mjd_obs = _get_float(header, "MJD-OBS")
+        if mjd_obs is not None:
+            mjd = mjd_obs
+        else:
+            date_mjd = _parse_date_obs(header)
+            if date_mjd is not None:
+                exptime = _get_float(header, "EXPTIME") or _get_float(header, "EXPOSURE")
+                if exptime is not None:
+                    mjd = date_mjd + (exptime / 2.0) / 86400.0
+                else:
+                    mjd = date_mjd
+
+    # Filter
+    filt = _get_str(header, "FILTER") or _get_str(header, "FILTER1")
+
+    # Exptime
+    exptime = _get_float(header, "EXPTIME") or _get_float(header, "EXPOSURE")
+
+    # Object name
+    obj = _get_str(header, "OBJECT")
+
+    return mjd, filt, exptime, obj
+
+
 # ---------------- Sorting logic ---------------- #
 
 
@@ -198,10 +265,7 @@ def detect_sessions(sorted_items: List[Tuple[str, float]], gap_hours: float) -> 
     for (path, mjd) in sorted_items:
         if mjd is None:
             # No time info: keep in current session
-            if not current:
-                current.append((path, mjd))
-            else:
-                current.append((path, mjd))
+            current.append((path, mjd))
             continue
 
         if last_mjd is None:
@@ -277,38 +341,90 @@ def make_session_name(base_pattern: str, session_idx: int, frame_idx: int) -> st
     return f"{root}_S{s_str}_F{f_str}{ext}"
 
 
+def format_exptime(exptime: Optional[float]) -> str:
+    """Format exposure time for auto-naming: exp120, exp500ms, exp0."""
+    if exptime is None:
+        return "exp0"
+    if exptime < 1.0:
+        ms = int(round(exptime * 1000))
+        return f"exp{ms}ms"
+    return f"exp{int(round(exptime))}"
+
+
+def sanitize_name(name: str) -> str:
+    """Remove characters unsafe for filenames."""
+    # Keep alphanumeric, dash, underscore, dot, plus
+    s = re.sub(r'[^\w\-+.]', '_', name)
+    # Collapse multiple underscores
+    s = re.sub(r'_+', '_', s)
+    return s.strip('_')
+
+
+def make_auto_name(obj_name: str, exptime_str: str, filt: str,
+                   session_idx: Optional[int], num: int, num_width: int,
+                   ext: str) -> str:
+    """
+    Build auto filename: {obj}_{exptime}_{filter}[_S{session}]_{num}.{ext}
+    """
+    parts = [obj_name, exptime_str, filt]
+    if session_idx is not None:
+        parts.append(f"S{session_idx:04d}")
+    parts.append(f"{num:0{num_width}d}")
+    return "_".join(parts) + ext
+
+
 def copy_or_link(src: str, dst: str) -> None:
     """
     Copy file (using shutil.copy2). Could be replaced by hardlink or symlink
     in the future if desired.
     """
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    os.makedirs(os.path.dirname(dst) if os.path.dirname(dst) else ".", exist_ok=True)
     shutil.copy2(src, dst)
+
+
+# ---------------- Num width helper ---------------- #
+
+def num_width(count: int) -> int:
+    """Determine zero-padding width for count items (minimum 4)."""
+    if count <= 0:
+        return 4
+    w = len(str(count))
+    return max(w, 4)
 
 
 # ---------------- Main script ---------------- #
 
 
 def main():
-    if len(sys.argv) < 3:
-        usage()
-
-    # Parse args (simple manual parsing to keep small and robust)
+    # Parse args
     args = sys.argv[1:]
-    input_spec = args[0]
-    output_pattern = args[1]
 
     sessions_mode = False
+    auto_mode = False
+    group_num = False
     gap_hours = 1.0
+    override_name = None
 
-    i = 2
+    positional = []
+    i = 0
     while i < len(args):
         a = args[i]
         if a in ("-s", "--sessions"):
             sessions_mode = True
             i += 1
-            continue
-        if a == "--gap-hours":
+        elif a == "--auto":
+            auto_mode = True
+            i += 1
+        elif a == "--group-num":
+            group_num = True
+            i += 1
+        elif a == "--name":
+            if i + 1 >= len(args):
+                sys.stderr.write("Error: --name requires a value.\n")
+                sys.exit(1)
+            override_name = args[i + 1]
+            i += 2
+        elif a == "--gap-hours":
             if i + 1 >= len(args):
                 sys.stderr.write("Error: --gap-hours requires a value.\n")
                 sys.exit(1)
@@ -318,10 +434,37 @@ def main():
                 sys.stderr.write("Error: --gap-hours must be a number.\n")
                 sys.exit(1)
             i += 2
-            continue
-        sys.stderr.write(f"Unknown argument: {a}\n")
-        usage()
+        elif a.startswith("--") or a == "-s":
+            sys.stderr.write(f"Unknown option: {a}\n")
+            usage()
+        else:
+            positional.append(a)
+            i += 1
 
+    if auto_mode:
+        if len(positional) < 2:
+            sys.stderr.write("Error: --auto requires input_spec and output_dir.\n")
+            usage()
+        input_spec = positional[0]
+        output_dir = positional[1]
+    elif sessions_mode:
+        if len(positional) < 2:
+            sys.stderr.write("Error: --sessions requires input_spec and output_pattern.\n")
+            usage()
+        input_spec = positional[0]
+        output_pattern = positional[1]
+    else:
+        if len(positional) < 2:
+            usage()
+        input_spec = positional[0]
+        output_pattern = positional[1]
+
+    # Validate incompatible options
+    if not auto_mode and (group_num or override_name is not None):
+        sys.stderr.write("Error: --group-num and --name require --auto mode.\n")
+        sys.exit(1)
+
+    # Expand input files
     try:
         files = bu_expand_input_spec(input_spec)
     except Exception as e:
@@ -332,9 +475,19 @@ def main():
         sys.stderr.write("No input files.\n")
         sys.exit(1)
 
+    print(f"Sorting {len(files)} file(s)...")
+
+    # ---- AUTO MODE ----
+    if auto_mode:
+        _run_auto_mode(files, output_dir, override_name, sessions_mode,
+                       gap_hours, group_num)
+        return
+
+    # ---- LEGACY MODES ----
+
     # Sort by JD
     try:
-        items = sort_by_jd(files)  
+        items = sort_by_jd(files)
     except Exception as e:
         sys.stderr.write(f"Error reading times from FITS files: {e}\n")
         sys.exit(1)
@@ -385,6 +538,157 @@ def main():
             session_idx += 1
 
     print("Done.")
+
+
+# ---------------- Auto mode ---------------- #
+
+
+def _run_auto_mode(files, output_dir, override_name, sessions_mode,
+                   gap_hours, group_num):
+    """
+    Auto-naming mode: read FITS headers, build names from metadata.
+    Format: {OBJECT}_exp{TIME}_{FILTER}[_S{SSSS}]_{NNNN}.fit
+    """
+    # Read metadata from all files
+    file_meta = []  # [(path, mjd, filter, exptime, object), ...]
+    for idx, fpath in enumerate(files, 1):
+        mjd, filt, exptime, obj = extract_metadata(fpath)
+        file_meta.append((fpath, mjd, filt, exptime, obj))
+        sys.stderr.write(f"\r  Reading headers: {idx}/{len(files)}")
+        sys.stderr.flush()
+    sys.stderr.write("\n")
+
+    # Determine object name
+    if override_name:
+        obj_name = sanitize_name(override_name)
+    else:
+        # Use most common OBJECT value from headers
+        obj_counts = {}
+        for _, _, _, _, obj in file_meta:
+            if obj:
+                key = obj.strip()
+                obj_counts[key] = obj_counts.get(key, 0) + 1
+        if obj_counts:
+            obj_name = sanitize_name(max(obj_counts, key=obj_counts.get))
+        else:
+            obj_name = "obj"
+
+    # Sort by MJD
+    file_meta.sort(key=lambda x: (x[1] is None, x[1] or 0))
+
+    # Build group key for each file: (exptime_str, filter)
+    def group_key(meta):
+        _, _, filt, exptime, _ = meta
+        return (format_exptime(exptime), filt or "nofilter")
+
+    # Determine extension from first input file
+    _, ext = os.path.splitext(files[0])
+    if not ext:
+        ext = ".fit"
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    if not sessions_mode:
+        # No sessions: just sort by JD and number
+        if group_num:
+            # Number within each (exptime, filter) group
+            groups = {}
+            for meta in file_meta:
+                gk = group_key(meta)
+                if gk not in groups:
+                    groups[gk] = []
+                groups[gk].append(meta)
+
+            total = 0
+            for gk in sorted(groups.keys()):
+                members = groups[gk]
+                nw = num_width(len(members))
+                exptime_str, filt = gk
+                for i, meta in enumerate(members, 1):
+                    fpath = meta[0]
+                    out_name = make_auto_name(obj_name, exptime_str, filt,
+                                              None, i, nw, ext)
+                    dst = os.path.join(output_dir, out_name)
+                    print(f"  {fpath}  ->  {out_name}")
+                    copy_or_link(fpath, dst)
+                    total += 1
+        else:
+            # Global numbering across all files
+            nw = num_width(len(file_meta))
+            for i, meta in enumerate(file_meta, 1):
+                fpath, mjd, filt, exptime, _ = meta
+                exptime_str = format_exptime(exptime)
+                filt_str = filt or "nofilter"
+                out_name = make_auto_name(obj_name, exptime_str, filt_str,
+                                          None, i, nw, ext)
+                dst = os.path.join(output_dir, out_name)
+                print(f"  {fpath}  ->  {out_name}")
+                copy_or_link(fpath, dst)
+
+    else:
+        # With sessions: split by time gaps, then name with session number
+        sorted_items = [(m[0], m[1]) for m in file_meta]
+        sessions = detect_sessions(sorted_items, gap_hours)
+
+        # Re-index file_meta by path for quick lookup
+        meta_by_path = {m[0]: m for m in file_meta}
+
+        if group_num:
+            # Number within each (exptime, filter, session) group
+            total = 0
+            for s_idx, session in enumerate(sessions, 1):
+                groups = {}
+                for (path, mjd) in session:
+                    meta = meta_by_path[path]
+                    gk = group_key(meta)
+                    if gk not in groups:
+                        groups[gk] = []
+                    groups[gk].append(meta)
+
+                print(f"Session {s_idx:04d}: {len(session)} files")
+                for gk in sorted(groups.keys()):
+                    members = groups[gk]
+                    nw = num_width(len(members))
+                    exptime_str, filt = gk
+                    for i, meta in enumerate(members, 1):
+                        fpath = meta[0]
+                        out_name = make_auto_name(obj_name, exptime_str, filt,
+                                                  s_idx, i, nw, ext)
+                        dst = os.path.join(output_dir, out_name)
+                        print(f"    {fpath}  ->  {out_name}")
+                        copy_or_link(fpath, dst)
+                        total += 1
+        else:
+            # Global numbering across all files (but with session tag)
+            nw = num_width(len(file_meta))
+            global_idx = 1
+            for s_idx, session in enumerate(sessions, 1):
+                print(f"Session {s_idx:04d}: {len(session)} files")
+                for (path, mjd) in session:
+                    meta = meta_by_path[path]
+                    _, _, filt, exptime, _ = meta
+                    exptime_str = format_exptime(exptime)
+                    filt_str = filt or "nofilter"
+                    out_name = make_auto_name(obj_name, exptime_str, filt_str,
+                                              s_idx, global_idx, nw, ext)
+                    dst = os.path.join(output_dir, out_name)
+                    print(f"    {fpath}  ->  {out_name}")
+                    copy_or_link(fpath, dst)
+                    global_idx += 1
+
+    # Summary
+    groups_found = set()
+    for meta in file_meta:
+        gk = group_key(meta)
+        groups_found.add(gk)
+
+    print(f"\nDone. {len(file_meta)} files -> {output_dir}/")
+    print(f"  Object: {obj_name}")
+    print(f"  Groups: {len(groups_found)}")
+    for exptime_str, filt in sorted(groups_found):
+        count = sum(1 for m in file_meta if group_key(m) == (exptime_str, filt))
+        print(f"    {exptime_str}_{filt}: {count} files")
 
 
 if __name__ == "__main__":

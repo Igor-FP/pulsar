@@ -40,6 +40,9 @@ A toolkit for batch processing of astronomical FITS images.
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **mtf.py** | Midtone Transfer Function (PixInsight-compatible) |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
+| **bestof.py** | Select best frames by FWHM (seeing quality) |
+| **rgb.py** | Merge/split RGB channels (3 mono ↔ 1 RGB FITS) |
+| **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
 
 ---
 
@@ -147,12 +150,20 @@ sub.py input_spec output_spec operand [offset]
 - `operand` — numeric constant OR FITS file (value to subtract)
 - `offset` — optional offset (default 0)
 
+**Options**:
+- `--continuum [snr]` — Continuum subtraction mode. Detects stars in both input and operand, cross-matches them (tolerance 1.5 px), and scales the operand so star flux matches before subtraction. Stars subtract to zero, leaving only emission line signal (e.g. H-alpha). SNR threshold for star detection (default: 38).
+
+**Formula with --continuum**: `result = input - K * operand + offset`, where K = sum(flux_input) / sum(flux_operand) computed from matched star photometry.
+
 **Examples**:
 ```bash
 sub light0001.fit dark_sub0001.fit master_dark.fit
 sub raw.fit calibrated.fit dark.fit 100
 sub light0001.fit cal0001.fit 0         # subtract zero (for thermally stable CCDs without bias)
 sub light0001.fit cal0001.fit 1024      # subtract offset constant
+sub ha.fit continuum_sub.fit red.fit --continuum
+sub ha.fit output.fit broadband.fit --continuum 50
+sub ha0001.fit out0001.fit red0001.fit 1000 --continuum   # with offset
 ```
 
 ---
@@ -752,11 +763,17 @@ sortfits.py input_spec output_pattern [-s|--sessions] [--gap-hours H]
 - `output_pattern` — output name pattern
 - `-s`, `--sessions` — session mode (output names: `<base>_Sssss_Fffff.fit`)
 - `--gap-hours H` — gap in hours for session splitting (default 1.0)
+- `--auto` — auto-naming mode: output names based on FITS headers: `{OBJECT}_exp{TIME}_{FILTER}[_S{SSSS}]_{NNNN}.fit`
+- `--name NAME` — override OBJECT header value (use with --auto)
+- `--group-num` — restart numbering per group (use with --auto)
 
 **Examples**:
 ```bash
 sortfits light0001.fit sorted0001.fit
 sortfits *.fit session.fit --sessions --gap-hours 2
+sortfits *.fit sorted/ --auto
+sortfits *.fit sorted/ --auto --name NGC1097
+sortfits *.fit sorted/ --auto --group-num
 ```
 
 ---
@@ -1135,6 +1152,8 @@ absession --flat .
 - Pillow (fits2tiff, tiff2fits)
 - rawpy (raw2fits)
 - exifread (raw2fits)
+- sep (bestof, rgbbalance --autostar, sub --continuum)
+- xisf (xisf2fits)
 
 ---
 
@@ -1356,8 +1375,10 @@ rgbbalance input_spec output_spec [options]
 - `--rgb R G B` — manual per-channel scaling coefficients
 - `--kmin N` — percent of darkest pixels for black level estimation (default 5)
 - `--kmax N` — percent of brightest pixels for white level estimation (default 5)
+- `--autostar [file]` — star-based white balance: detects stars on G channel, cross-matches with R and B (tolerance 1.5 px), measures flux via aperture photometry, computes K from total star flux ratios. More accurate than `--auto` for narrowband/broadband mixing. Reference from file (default: first input).
+- `--snr N` — SNR threshold for --autostar star detection (default: 38)
 
-`--rgb`, `--auto`, `--autoeach` are mutually exclusive. Without any — only background neutralization and inter-frame brightness normalization.
+`--rgb`, `--auto`, `--autoeach`, `--autostar` are mutually exclusive. Without any — only background neutralization and inter-frame brightness normalization.
 
 **Algorithm**:
 1. Quantile medians for each channel (bottom kmin%, top kmax%)
@@ -1378,6 +1399,100 @@ rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5
 
 # Only background + brightness normalization
 rgbbalance img0001.fit out0001.fit
+
+# Star-based white balance
+rgbbalance img.fit out.fit --autostar
+rgbbalance img0001.fit out0001.fit --autostar ref.fit --snr 50
+```
+
+---
+
+### bestof.py
+
+**Purpose**: Select best frames by FWHM (seeing quality).
+
+Analyses star FWHM across a set of FITS images using SEP-based star detection. Can copy best N% frames, filter by FWHM threshold, and/or write a CSV report.
+
+**Dependencies**: sep (`pip install sep`)
+
+**Syntax**:
+```
+bestof input_spec [output_spec] [options]
+```
+
+**Selection modes** (at least one required unless --csv only):
+- `--best P` — copy best P percent of frames (lowest FWHM), 1-99
+- `--threshold T` — copy frames with FWHM <= T pixels
+
+**Options**:
+- `--csv FILE` — write CSV report: fwhm,filename (sorted by FWHM)
+- `--snr N` — SNR threshold for star detection (default: 10)
+
+**Examples**:
+```bash
+bestof light0001.fit best0001.fit --best 70
+bestof *.fit selected/ --threshold 3.5
+bestof *.fit --csv report.csv
+bestof *.fit best/ --best 80 --csv report.csv
+```
+
+---
+
+### rgb.py
+
+**Purpose**: Merge/split RGB channels in FITS files.
+
+Merge: combines 3 monochrome 2D FITS (R, G, B) into one 3-channel RGB FITS (3, H, W).
+Split: extracts R, G, B channels from RGB FITS (3, H, W) into 3 monochrome FITS. Sets FILTER header to R/G/B for each channel.
+
+**Syntax**:
+```
+rgb --merge inR inG inB --out outRGB
+rgb --split inRGB --out outR outG outB
+```
+
+**Parameters**:
+All file arguments support standard specs: single file, wildcard, numbered sequence, @list.txt. For merge, all three inputs must expand to the same number of files.
+
+**Examples**:
+```bash
+# Merge single files
+rgb --merge r.fit g.fit b.fit --out rgb.fit
+
+# Merge sequences
+rgb --merge r0001.fit g0001.fit b0001.fit --out rgb0001.fit
+
+# Split single file
+rgb --split rgb.fit --out r.fit g.fit b.fit
+
+# Split sequence
+rgb --split rgb0001.fit --out r0001.fit g0001.fit b0001.fit
+```
+
+---
+
+### xisf2fits.py
+
+**Purpose**: Convert XISF (PixInsight) files to FITS format.
+
+Preserves pixel data as-is (float32/float64/uint16, no type conversion). Restores FITS header keywords from XISF FITSKeyword metadata. Handles RGB (HWC→CHW axis conversion) and mono images.
+
+**Dependencies**: xisf (`pip install xisf`)
+
+**Syntax**:
+```
+xisf2fits input_spec output_spec
+```
+
+**Parameters**:
+- `input_spec` — single .xisf file, wildcard (*.xisf), or @list.txt
+- `output_spec` — single .fit file, numbered pattern (out0001.fit), or directory (outdir/)
+
+**Examples**:
+```bash
+xisf2fits image.xisf image.fit
+xisf2fits *.xisf converted/
+xisf2fits @list.txt out0001.fit
 ```
 
 ---

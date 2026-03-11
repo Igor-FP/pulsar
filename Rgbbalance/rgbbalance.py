@@ -28,9 +28,9 @@ import numpy as np
 from astropy.io import fits
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import shared utilities (two levels up from Personal/Rgbbalance/)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lib")))
 import batch_utils
+import star_utils
 
 
 # ---------------------------------------------------------------------------
@@ -54,17 +54,23 @@ def usage():
         "  --auto [file]    Auto white balance: scale R & B to match G range.\n"
         "                   Reference from file (default: first input file).\n"
         "  --autoeach       Auto white balance computed independently per file.\n"
+        "  --autostar [file] Star-based white balance: detect stars on G channel,\n"
+        "                   measure flux on R/G/B via aperture photometry,\n"
+        "                   compute K from total star flux ratios.\n"
+        "                   Reference from file (default: first input file).\n"
         "  --rgb R G B      Manual per-channel scaling coefficients.\n"
         "  --kmin N         Percent of darkest pixels for black level  (default: 5)\n"
         "  --kmax N         Percent of brightest pixels for white level (default: 5)\n"
+        "  --snr N          SNR threshold for --autostar detection (default: 38)\n"
         "\n"
-        "  --rgb, --auto, --autoeach are mutually exclusive.\n"
+        "  --rgb, --auto, --autoeach, --autostar are mutually exclusive.\n"
         "  Without any: only background neutralization + brightness normalization.\n"
         "\n"
         "Examples:\n"
         "  rgbbalance.py img.fit out.fit --auto\n"
         "  rgbbalance.py img0001.fit out0001.fit --auto ref.fit\n"
         "  rgbbalance.py img0001.fit out0001.fit --autoeach\n"
+        "  rgbbalance.py img0001.fit out0001.fit --autostar\n"
         "  rgbbalance.py img0001.fit out0001.fit --rgb 1.1 2.0 0.5\n"
         "  rgbbalance.py img0001.fit out0001.fit --auto --kmin 10 --kmax 3\n"
     )
@@ -77,9 +83,11 @@ def parse_args(argv):
     rgb_k = None
     auto = False
     autoeach = False
+    autostar = False
     auto_ref_file = None
     kmin = 5.0
     kmax = 5.0
+    snr = 38.0
 
     # Parse option flags
     i = 0
@@ -100,8 +108,6 @@ def parse_args(argv):
             i += 1
             # Optional reference filename (next arg if not a flag)
             if i < len(args) and not args[i].startswith("--"):
-                # Check if it looks like a file (has extension), not a positional
-                # We'll treat it as ref file if it contains a dot in the basename
                 candidate = args[i]
                 if "." in os.path.basename(candidate):
                     auto_ref_file = candidate
@@ -109,6 +115,15 @@ def parse_args(argv):
         elif args[i] == "--autoeach":
             autoeach = True
             i += 1
+        elif args[i] == "--autostar":
+            autostar = True
+            i += 1
+            # Optional reference filename
+            if i < len(args) and not args[i].startswith("--"):
+                candidate = args[i]
+                if "." in os.path.basename(candidate):
+                    auto_ref_file = candidate
+                    i += 1
         elif args[i] == "--kmin":
             if i + 1 >= len(args):
                 sys.stderr.write("Error: --kmin requires a value.\n")
@@ -129,14 +144,24 @@ def parse_args(argv):
                 sys.stderr.write("Error: --kmax value must be a number.\n")
                 sys.exit(1)
             i += 2
+        elif args[i] == "--snr":
+            if i + 1 >= len(args):
+                sys.stderr.write("Error: --snr requires a value.\n")
+                sys.exit(1)
+            try:
+                snr = float(args[i+1])
+            except ValueError:
+                sys.stderr.write("Error: --snr value must be a number.\n")
+                sys.exit(1)
+            i += 2
         else:
             positional.append(args[i])
             i += 1
 
     # Validate mutual exclusivity
-    mode_count = sum([rgb_k is not None, auto, autoeach])
+    mode_count = sum([rgb_k is not None, auto, autoeach, autostar])
     if mode_count > 1:
-        sys.stderr.write("Error: --rgb, --auto, --autoeach are mutually exclusive.\n")
+        sys.stderr.write("Error: --rgb, --auto, --autoeach, --autostar are mutually exclusive.\n")
         sys.exit(1)
 
     if len(positional) < 2:
@@ -145,7 +170,8 @@ def parse_args(argv):
     input_spec = positional[0]
     output_spec = positional[1]
 
-    return input_spec, output_spec, rgb_k, auto, autoeach, auto_ref_file, kmin, kmax
+    return (input_spec, output_spec, rgb_k, auto, autoeach, autostar,
+            auto_ref_file, kmin, kmax, snr)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +247,136 @@ def compute_reference(stats, rgb_k, auto):
         K = (1.0, 1.0, 1.0)
 
     return black, range_ref, K
+
+
+# ---------------------------------------------------------------------------
+# Star-based color balance
+# ---------------------------------------------------------------------------
+
+def compute_star_balance(data_3d, snr=38.0):
+    """Compute RGB balance coefficients from star photometry.
+
+    Detects stars on the G channel, cross-matches with R and B detections
+    (tolerance 1.5 px), filters out overexposed stars (peak > 50% range),
+    and computes K from total flux ratios.
+
+    Parameters
+    ----------
+    data_3d : 3D array (3, H, W) — RGB channels
+    snr : SNR threshold for star detection
+
+    Returns
+    -------
+    K : (K_R, K_G, K_B) coefficients
+    n_stars : number of stars used
+    """
+    ch_r, ch_g, ch_b = data_3d[0], data_3d[1], data_3d[2]
+
+    # Detect stars on G channel
+    cat_g = star_utils.detect_stars(ch_g, snr=snr)
+    if cat_g.n < 3:
+        sys.stderr.write(f"  WARNING: only {cat_g.n} stars on G channel, "
+                         "falling back to K=1.0\n")
+        return (1.0, 1.0, 1.0), cat_g.n
+
+    # Determine full range for overexposure filter (50% of dtype range)
+    if np.issubdtype(data_3d.dtype, np.integer):
+        max_range = float(np.iinfo(data_3d.dtype).max)
+    else:
+        max_range = float(np.max(data_3d))
+    peak_limit = 0.5 * max_range
+
+    # Filter: exclude overexposed stars (peak in absolute ADU)
+    # cat_g.peak is above background, estimate absolute peak
+    g_data = star_utils._ensure_sep_data(ch_g)
+    g_bkg, _ = star_utils._estimate_background(g_data)
+    # Approximate absolute peak = peak_above_bg + local background
+    abs_peak = cat_g.peak.copy()
+    for i in range(cat_g.n):
+        iy = min(int(cat_g.y[i]), g_bkg.shape[0] - 1)
+        ix = min(int(cat_g.x[i]), g_bkg.shape[1] - 1)
+        abs_peak[i] += g_bkg[iy, ix]
+
+    bright_ok = abs_peak < peak_limit
+
+    if np.sum(bright_ok) < 3:
+        sys.stderr.write(f"  WARNING: only {np.sum(bright_ok)} non-saturated stars, "
+                         "using all stars\n")
+        bright_ok = np.ones(cat_g.n, dtype=bool)
+
+    # Positions and FWHM of usable stars
+    x = cat_g.x[bright_ok]
+    y = cat_g.y[bright_ok]
+    fwhm = cat_g.fwhm[bright_ok]
+    median_fwhm = float(np.median(fwhm))
+
+    # Aperture radii: +2 px margin for chromatic shift tolerance
+    r_aperture = 1.25 * median_fwhm + 2.0
+    r_inner = max(2.0 * median_fwhm + 2.0, r_aperture + 2.0)
+    r_outer = max(3.0 * median_fwhm + 2.0, r_inner + 3.0)
+
+    # Ensure minimum sizes
+    r_aperture = max(r_aperture, 4.0)
+    r_inner = max(r_inner, r_aperture + 2.0)
+    r_outer = max(r_outer, r_inner + 3.0)
+
+    # Cross-match: detect on R and B, keep only stars near G positions
+    cat_r = star_utils.detect_stars(ch_r, snr=snr)
+    cat_b = star_utils.detect_stars(ch_b, snr=snr)
+
+    tolerance = 1.5  # pixels
+
+    # Find G stars that have matches in both R and B
+    matched = np.zeros(len(x), dtype=bool)
+    for i in range(len(x)):
+        # Check R channel
+        if cat_r.n > 0:
+            dist_r = np.sqrt((cat_r.x - x[i])**2 + (cat_r.y - y[i])**2)
+            has_r = np.min(dist_r) <= tolerance
+        else:
+            has_r = False
+        # Check B channel
+        if cat_b.n > 0:
+            dist_b = np.sqrt((cat_b.x - x[i])**2 + (cat_b.y - y[i])**2)
+            has_b = np.min(dist_b) <= tolerance
+        else:
+            has_b = False
+        matched[i] = has_r and has_b
+
+    n_matched = int(np.sum(matched))
+    if n_matched < 3:
+        sys.stderr.write(f"  WARNING: only {n_matched} cross-matched stars, "
+                         "skipping match filter\n")
+        matched = np.ones(len(x), dtype=bool)
+        n_matched = len(x)
+
+    x_use = x[matched]
+    y_use = y[matched]
+
+    # Aperture photometry on all 3 channels at same positions
+    flux_r = star_utils.measure_flux_at(ch_r, x_use, y_use,
+                                        r_aperture, r_inner, r_outer)
+    flux_g = star_utils.measure_flux_at(ch_g, x_use, y_use,
+                                        r_aperture, r_inner, r_outer)
+    flux_b = star_utils.measure_flux_at(ch_b, x_use, y_use,
+                                        r_aperture, r_inner, r_outer)
+
+    # Use only stars with positive flux in all channels
+    valid = (flux_r > 0) & (flux_g > 0) & (flux_b > 0)
+    n_valid = int(np.sum(valid))
+    if n_valid < 1:
+        sys.stderr.write("  WARNING: no stars with positive flux in all channels\n")
+        return (1.0, 1.0, 1.0), 0
+
+    sum_r = np.sum(flux_r[valid])
+    sum_g = np.sum(flux_g[valid])
+    sum_b = np.sum(flux_b[valid])
+
+    K_r = sum_g / sum_r
+    K_b = sum_g / sum_b
+    K = (K_r, 1.0, K_b)
+
+    return K, n_valid
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +556,8 @@ def compute_ref_from_file(ref_file, kmin, kmax, rgb_k, auto):
 
 def main():
     (input_spec, output_spec,
-     rgb_k, auto, autoeach, auto_ref_file,
-     kmin, kmax) = parse_args(sys.argv)
+     rgb_k, auto, autoeach, autostar, auto_ref_file,
+     kmin, kmax, snr) = parse_args(sys.argv)
 
     try:
         io_pairs = batch_utils.build_io_file_lists(input_spec, output_spec)
@@ -417,7 +573,54 @@ def main():
     ncpu = os.cpu_count() or 1
     workers = min(max(1, ncpu - 1), total)
 
-    if autoeach:
+    if autostar:
+        # --- Star-based white balance ---
+        # Compute K from reference file, then apply as fixed coefficients
+        ref_file = auto_ref_file if auto_ref_file else io_pairs[0][0]
+
+        sys.stderr.write(f"Detecting stars on {os.path.basename(ref_file)} (snr={snr})...\n")
+        with fits.open(ref_file, memmap=False) as hdul:
+            ref_data = hdul[0].data.astype(np.float64)
+
+        K_star, n_stars = compute_star_balance(ref_data, snr=snr)
+
+        print(f"RGB balance: {total} file(s), mode=autostar, "
+              f"ref={os.path.basename(ref_file)}")
+        print(f"  Stars used: {n_stars}, "
+              f"K_R={K_star[0]:.6f}, K_G={K_star[1]:.6f}, K_B={K_star[2]:.6f}")
+
+        # Compute background reference for neutralization + brightness norm
+        try:
+            black, range_ref, _, ref_stats = compute_ref_from_file(
+                ref_file, kmin, kmax, None, False)
+        except Exception as e:
+            sys.stderr.write(f"Error reading reference: {e}\n")
+            sys.exit(1)
+
+        # Use star-derived K
+        K = K_star
+
+        done = 0
+        errors = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(process_file, infile, outfile,
+                            kmin, kmax, black, range_ref, K):
+                    os.path.basename(infile)
+                for infile, outfile in io_pairs
+            }
+            for future in as_completed(futures):
+                fname = futures[future]
+                done += 1
+                try:
+                    brightness = future.result()
+                    sys.stderr.write(f"\r{done}/{total}  bright={brightness:.4f}")
+                    sys.stderr.flush()
+                except Exception as e:
+                    errors += 1
+                    sys.stderr.write(f"\n  Error '{fname}': {e}\n")
+
+    elif autoeach:
         # --- Per-file independent auto balance ---
         print(f"RGB balance: {total} file(s), mode=autoeach, "
               f"kmin={kmin}%, kmax={kmax}%, threads={workers}")
@@ -447,7 +650,7 @@ def main():
 
     else:
         # --- Reference-based balance (auto/rgb/neutral) ---
-        mode = "auto" if auto else ("rgb" if rgb_k else "neutral")
+        mode = "auto" if auto else ("rgb" if rgb_k is not None else "neutral")
 
         # Determine reference file
         if auto_ref_file:
