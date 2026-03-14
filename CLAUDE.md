@@ -87,12 +87,13 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | hotfix.py | Remove single hot (and cold) pixels |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
 | rgbbalance.py | RGB color balance and brightness normalization |
+| staralign.py | Star-based image registration (pentagon descriptors, TPS) |
 
 ## Dependencies
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py), sep (staralign, bestof, rgbbalance)
 
 ## Running Tools
 
@@ -272,6 +273,26 @@ set "SCRIPTTMP=%~dp0..\ScriptName\scriptname.py"
 echo Running %SCRIPTTMP%
 python "%SCRIPTTMP%" %*
 ```
+
+### StarAlign Library Modules
+
+`staralign.py` uses four library modules in `lib/`:
+
+| Module | Purpose |
+|--------|---------|
+| `star_utils.py` | Star detection via SEP, hot pixel filtering, FWHM estimation |
+| `star_match.py` | Pentagon descriptor building (5-star, 6D hashes), KD-tree matching, angular verification, RANSAC fitting |
+| `star_tps.py` | Thin Plate Spline iterative refinement with quality gate |
+| `star_resample.py` | Image resampling via coarse-grid TPS (32px step) + bicubic upscale |
+
+**Pipeline**: detect → descriptors → hash match → angular verify → RANSAC → TPS refine → resample
+
+**Key design notes**:
+- Pentagon descriptors (5 stars, 6D) balance uniqueness vs noise tolerance
+- Coarse-grid TPS evaluates on 32px grid, bicubic upscale — reduces ~26M TPS evals to ~25K
+- `map_coordinates` releases GIL, enabling real thread parallelism for resampling
+- Auto-retry [1, 2, 2.5, 3]×base handles cross-filter star population differences
+- Tools importing star_* modules: staralign.py, bestof.py, rgbbalance.py (--autostar), sub.py (--continuum)
 
 ### Other Guidelines
 
