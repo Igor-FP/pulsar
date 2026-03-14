@@ -42,6 +42,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
 | **rgb.py** | Merge/split RGB channels (3 mono ↔ 1 RGB FITS) |
+| **staralign.py** | Star-based image registration (pentagon descriptors, TPS) |
 | **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
 
 ---
@@ -1138,6 +1139,98 @@ absession --flat .
 
 ---
 
+### staralign.py
+
+**Purpose**: Star-based image registration for astronomical frames.
+
+Automatically detects stars, matches them across frames, and aligns images with sub-pixel accuracy. Handles scale differences, rotation, mirror, and non-linear distortions (TPS). Robust to cross-filter matching (e.g. R-reference vs Ha-narrowband).
+
+**Dependencies**: scipy, sep
+
+**Two operating modes:**
+
+1. **Reference alignment** (with `--ref`) — aligns all target frames to a reference frame
+2. **Chromatic correction** (without `--ref`) — aligns R and B channels to G within each RGB file. Corrects atmospheric refraction and chromatic aberration
+
+**Syntax**:
+```
+staralign input_spec output_spec --ref reference.fit [options]
+staralign input_spec output_spec                     (chromatic mode)
+```
+
+**Parameters**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--ref FILE` | — | Reference frame (omit for chromatic mode) |
+| `--model {tps\|projective}` | tps | Registration model |
+| `--smoothness F` | 0.25 | TPS smoothness (0 = exact interpolation) |
+| `--descriptors N` | 20 | Pentagons per star (5-50) |
+
+**Matching parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--hash-tol F` | 0.05 | Pentagon hash tolerance in 6D. Increase to 0.1-0.15 for cross-filter |
+| `--angle-tol F` | 0.15 | Angular verification tolerance (radians). Increase to 0.25-0.3 for sparse fields |
+| `--min-vote N` | 2 | Min hash votes per star pair. Set to 1 for difficult cases |
+| `--tolerance F` | 3.0 | RANSAC inlier tolerance (pixels). Increase to 5-10 for large distortion |
+
+**Star detection:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--snr F` | 5.0 | Detection SNR threshold (lower = more stars) |
+| `--max-stars N` | 150 | Initial max stars. Auto-retries with 2x, 2.5x, 3x on failure |
+| `--no-retry` | off | Disable auto-retry with more stars |
+
+**Other:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--threads N` | CPU-1 | Worker threads (forced to 1 in --debug mode) |
+| `--debug` | off | Detailed per-frame diagnostics and timing |
+| `--no-mirror` | off | Disable mirror fallback |
+
+**Auto-retry**: on matching failure, automatically retries with more stars: levels [N, 2N, 2.5N, 3N], capped by detected count. Disable with `--no-retry`.
+
+**Recommended settings for difficult cases:**
+
+| Scenario | Recommended Settings |
+|----------|---------------------|
+| Same filter, same scope | defaults work |
+| Cross-filter (R vs Ha) | `--max-stars 200` |
+| Different focal lengths | `--tolerance 5` or higher |
+| Very sparse field (<30 stars) | `--min-vote 1 --angle-tol 0.25` |
+| Very different star counts | `--max-stars 300 --hash-tol 0.1` |
+
+**Output**: each line shows `[N/M] filename: OK inliers, tps_pairs, residual_px` or `FAIL reason`.
+- **inliers** — star pairs that survived RANSAC outlier rejection
+- **tps_pairs** — star pairs used for final TPS warp (typically 30-300)
+- **residual_px** — median positional error in pixels (lower = better)
+
+Final summary: counts, timing, list of failed files.
+
+**Examples**:
+```bash
+# Align all frames to reference
+staralign *.fit out0001.fit --ref ref.fit
+
+# Cross-filter: R-reference, Ha-targets
+staralign Ha_*.fit aligned0001.fit --ref R_ref.fit --max-stars 200
+
+# Multi-threaded
+staralign *.fit out0001.fit --ref ref.fit --threads 4
+
+# Chromatic correction in RGB file
+staralign color.fit corrected.fit
+
+# Batch chromatic correction
+staralign *.fit out0001.fit
+```
+
+---
+
 ## Dependencies
 
 **Required**:
@@ -1146,13 +1239,13 @@ absession --flat .
 - astropy
 
 **For advanced features**:
-- scipy (fft_align, autoflat, autosolve)
+- scipy (fft_align, autoflat, autosolve, staralign)
 - reproject (autosolve reprojection)
 - astrometry.net (autosolve solving)
 - Pillow (fits2tiff, tiff2fits)
 - rawpy (raw2fits)
 - exifread (raw2fits)
-- sep (bestof, rgbbalance --autostar, sub --continuum)
+- sep (bestof, rgbbalance --autostar, sub --continuum, staralign)
 - xisf (xisf2fits)
 
 ---

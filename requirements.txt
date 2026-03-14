@@ -6,8 +6,8 @@ numpy
 astropy
 
 # === Recommended (used by several scripts) ===
-scipy                   # autocalibrate, autoflat, autosolve, fft_align, crop
-sep                     # star_utils — star detection, FWHM, photometry
+scipy                   # autocalibrate, autoflat, autosolve, fft_align, crop, staralign
+sep                     # star_utils — star detection, FWHM, photometry (staralign, bestof, rgbbalance)
 
 # === Optional (install as needed) ===
 Pillow                  # fits2tiff, tiff2fits — TIFF image conversion
