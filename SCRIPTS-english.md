@@ -38,11 +38,11 @@ A toolkit for batch processing of astronomical FITS images.
 | **crop.py** | Crop FITS images (by size/center or margins) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
-| **mtf.py** | Midtone Transfer Function (PixInsight-compatible) |
+| **mtf.py** | Midtone Transfer Function |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
 | **rgb.py** | Merge/split RGB channels (3 mono ↔ 1 RGB FITS) |
-| **staralign.py** | Star-based image registration (pentagon descriptors, TPS) |
+| **staralign.py** | Star-based image registration (Automatic, Thin Plate Spline) |
 | **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
 
 ---

@@ -1,79 +1,3 @@
-<!-- ============== VARIANT 1 - Classic ============== -->
-<!--
-```
- ____  _   _ _     ____    _    ____
-|  _ \| | | | |   / ___|  / \  |  _ \
-| |_) | | | | |   \___ \ / _ \ | |_) |
-|  __/| |_| | |___ ___) / ___ \|  _ <
-|_|    \___/|_____|____/_/   \_\_| \_\
-
-Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 2 - Box with stars ============== -->
-<!--
-```
-╔═══════════════════════════════════════════════════════════════════╗
-║  ★  P U L S A R  ★                                                ║
-║  Portable Utility Library for Shell Astrophotography Routines    ║
-╚═══════════════════════════════════════════════════════════════════╝
-```
--->
-
-<!-- ============== VARIANT 3 - Minimalist ============== -->
-<!--
-```
-    ____  __  ____   ___   ___  ____
-   / __ \/ / / / /  / __\ / _ \/ __ \
-  / /_/ / /_/ / /__/\__ \/ /_\ / /_/ /
- / .___/\____/____/\___//_/ \_\____/
-/_/  Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 4 - Cosmic ============== -->
-<!--
-```
-       *  .  *       .       *    .        *   .
-    .    *       P U L S A R        .  *      .
-  *    .    *                   .        *
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Portable Utility Library for Shell Astrophotography Routines
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-       .    *    .        *   .      *     .
-```
--->
-
-<!-- ============== VARIANT 5 - Block (big) ============== -->
-<!--
-```
-██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
-██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
-██████╔╝██║   ██║██║     ███████╗███████║██████╔╝
-██╔═══╝ ██║   ██║██║     ╚════██║██╔══██║██╔══██╗
-██║     ╚██████╔╝███████╗███████║██║  ██║██║  ██║
-╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
-
-Portable Utility Library for Shell Astrophotography Routines
-```
--->
-
-<!-- ============== VARIANT 6 - Classic with letter meanings ============== -->
-<!--
-```
- ____  _   _ _     ____    _    ____
-|  _ \| | | | |   / ___|  / \  |  _ \
-| |_) | | | | |   \___ \ / _ \ | |_) |
-|  __/| |_| | |___ ___) / ___ \|  _ <
-|_|    \___/|_____|____/_/   \_\_| \_\
-
-[P]ortable [U]tility [L]ibrary for [S]hell [A]strophotography [R]outines
-```
--->
-
-<!-- ============== CHOSEN VARIANT (uncomment one above and paste here) ============== -->
-
 ```
 ██████╗ ██╗   ██╗██╗     ███████╗ █████╗ ██████╗
 ██╔══██╗██║   ██║██║     ██╔════╝██╔══██╗██╔══██╗
@@ -137,8 +61,10 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Astrometry and Alignment
 - WCS solving via astrometry.net (WSL on Windows)
 - Reprojection to tangent plane (TAN/gnomonic projection)
+- Star-based registration with pentagon descriptors, RANSAC and TPS refinement
 - FFT alignment with subpixel accuracy
 - Rotation and scale correction
+- Chromatic aberration correction (R/B channel alignment to G)
 - Crop with autocenter or manual positions from CSV
 
 ### Image Processing
@@ -193,7 +119,8 @@ On Linux/macOS, run scripts directly: `python Add/add.py --help`
 
 ```bash
 pip install numpy astropy              # required — core functionality
-pip install scipy                      # autocalibrate, autoflat, autosolve, fft_align, crop
+pip install scipy                      # autocalibrate, autoflat, autosolve, fft_align, crop, staralign
+pip install sep                        # staralign, bestof, rgbbalance (star detection)
 pip install Pillow                     # fits2tiff, tiff2fits
 pip install rawpy exifread             # raw2fits (CR2 fallback reader)
 pip install reproject                  # autosolve (WCS reprojection)
@@ -293,13 +220,14 @@ autosolve --rectify --align *.fit aligned\
 | **fits2tiff.py** | FITS to TIFF conversion |
 | **tiff2fits.py** | TIFF to FITS conversion |
 | **raw2fits.py** | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
+| **staralign.py** | Star-based image registration |
 | **fft_align.py** | FFT-based alignment |
 | **absession.py** | AstroBin acquisition session CSV |
 | **binxy.py** | Software 2×2 / 4×4 pixel binning |
 | **crop.py** | Crop FITS images (by size/center or margins) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
-| **mtf.py** | Midtone Transfer Function (PixInsight-compatible) |
+| **mtf.py** | Midtone Transfer Function |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 
 Full documentation: **[SCRIPTS.md](SCRIPTS-english.md)** (English) | **[SCRIPTS.md](SCRIPTS.md)** (Russian)
@@ -371,6 +299,7 @@ PULSAR/
 ├── Fits2tiff/         # fits2tiff.py
 ├── Tiff2fits/         # tiff2fits.py
 ├── Raw2fits/          # raw2fits.py
+├── Staralign/         # staralign.py
 ├── FFT_Align/         # fft_align.py
 ├── Absession/         # absession.py
 ├── Binxy/             # binxy.py
