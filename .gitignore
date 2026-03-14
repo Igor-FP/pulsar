@@ -28,6 +28,9 @@ View/
 # Personal scripts (not for publishing)
 Personal/
 
+# Technology documentation (local reference)
+TechnologyDocs/
+
 # Claude Code local data
 .claude/
 
