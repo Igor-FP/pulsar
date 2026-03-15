@@ -62,6 +62,9 @@ def usage():
         "  --kmin N         Percent of darkest pixels for black level  (default: 5)\n"
         "  --kmax N         Percent of brightest pixels for white level (default: 5)\n"
         "  --snr N          SNR threshold for --autostar detection (default: 38)\n"
+        "  --warmth W       Color temperature shift (-1..+1, default: 0).\n"
+        "                   W>0: warmer (more red), W<0: cooler (more blue).\n"
+        "                   Applied after auto/manual balance.\n"
         "\n"
         "  --rgb, --auto, --autoeach, --autostar are mutually exclusive.\n"
         "  Without any: only background neutralization + brightness normalization.\n"
@@ -88,6 +91,7 @@ def parse_args(argv):
     kmin = 5.0
     kmax = 5.0
     snr = 38.0
+    warmth = 0.0
 
     # Parse option flags
     i = 0
@@ -154,6 +158,19 @@ def parse_args(argv):
                 sys.stderr.write("Error: --snr value must be a number.\n")
                 sys.exit(1)
             i += 2
+        elif args[i] == "--warmth":
+            if i + 1 >= len(args):
+                sys.stderr.write("Error: --warmth requires a value.\n")
+                sys.exit(1)
+            try:
+                warmth = float(args[i+1])
+            except ValueError:
+                sys.stderr.write("Error: --warmth value must be a number.\n")
+                sys.exit(1)
+            if warmth < -1.0 or warmth > 1.0:
+                sys.stderr.write("Error: --warmth must be in range [-1, 1].\n")
+                sys.exit(1)
+            i += 2
         else:
             positional.append(args[i])
             i += 1
@@ -171,7 +188,7 @@ def parse_args(argv):
     output_spec = positional[1]
 
     return (input_spec, output_spec, rgb_k, auto, autoeach, autostar,
-            auto_ref_file, kmin, kmax, snr)
+            auto_ref_file, kmin, kmax, snr, warmth)
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +397,85 @@ def compute_star_balance(data_3d, snr=38.0):
 
 
 # ---------------------------------------------------------------------------
+# Warmth (color temperature shift along Planck curve)
+# ---------------------------------------------------------------------------
+
+def _planck_rgb(temp_k):
+    """Approximate RGB for blackbody at given temperature (Tanner Helland method).
+
+    Returns (R, G, B) normalized so that G=1.0.
+    Valid range ~1000K..40000K.
+    """
+    t = temp_k / 100.0
+
+    # Red
+    if t <= 66:
+        r = 255.0
+    else:
+        r = 329.698727446 * ((t - 60) ** -0.1332047592)
+        r = max(0, min(255, r))
+
+    # Green
+    if t <= 66:
+        g = 99.4708025861 * np.log(t) - 161.1195681661
+    else:
+        g = 288.1221695283 * ((t - 60) ** -0.0755148492)
+    g = max(0, min(255, g))
+
+    # Blue
+    if t >= 66:
+        b = 255.0
+    elif t <= 19:
+        b = 0.0
+    else:
+        b = 138.5177312231 * np.log(t - 10) - 305.0447927307
+        b = max(0, min(255, b))
+
+    # Normalize to G=1
+    if g > 0:
+        return r / g, 1.0, b / g
+    return 1.0, 1.0, 1.0
+
+
+def compute_warmth_coefficients(warmth):
+    """Convert warmth value (-1..+1) to RGB scaling coefficients.
+
+    W=0: neutral (6500K, daylight). W=+1: warm (3500K). W=-1: cool (15000K).
+    Returns (K_r, K_g, K_b) relative to neutral.
+    """
+    if abs(warmth) < 1e-6:
+        return (1.0, 1.0, 1.0)
+
+    # Map W to temperature: 0 -> 6500K, +1 -> 3500K, -1 -> 15000K
+    # Use exponential mapping for perceptual uniformity
+    neutral_temp = 6500.0
+    if warmth > 0:
+        # Warm: 6500 -> 3500
+        temp = neutral_temp * (3500.0 / neutral_temp) ** warmth
+    else:
+        # Cool: 6500 -> 15000
+        temp = neutral_temp * (15000.0 / neutral_temp) ** (-warmth)
+
+    # Get RGB at target and neutral temperatures
+    r_t, g_t, b_t = _planck_rgb(temp)
+    r_n, g_n, b_n = _planck_rgb(neutral_temp)
+
+    # Coefficients = ratio of target to neutral
+    k_r = (r_t / r_n) if r_n > 0 else 1.0
+    k_b = (b_t / b_n) if b_n > 0 else 1.0
+
+    return (k_r, 1.0, k_b)
+
+
+def apply_warmth(K, warmth):
+    """Apply warmth shift to existing balance coefficients K=(R,G,B)."""
+    if abs(warmth) < 1e-6:
+        return K
+    w_r, w_g, w_b = compute_warmth_coefficients(warmth)
+    return (K[0] * w_r, K[1] * w_g, K[2] * w_b)
+
+
+# ---------------------------------------------------------------------------
 # dtype conversion
 # ---------------------------------------------------------------------------
 
@@ -557,7 +653,7 @@ def compute_ref_from_file(ref_file, kmin, kmax, rgb_k, auto):
 def main():
     (input_spec, output_spec,
      rgb_k, auto, autoeach, autostar, auto_ref_file,
-     kmin, kmax, snr) = parse_args(sys.argv)
+     kmin, kmax, snr, warmth) = parse_args(sys.argv)
 
     try:
         io_pairs = batch_utils.build_io_file_lists(input_spec, output_spec)
@@ -597,8 +693,10 @@ def main():
             sys.stderr.write(f"Error reading reference: {e}\n")
             sys.exit(1)
 
-        # Use star-derived K
-        K = K_star
+        # Use star-derived K, apply warmth shift
+        K = apply_warmth(K_star, warmth)
+        if abs(warmth) > 1e-6:
+            print(f"  Warmth={warmth:+.2f}: K_R={K[0]:.6f}, K_B={K[2]:.6f}")
 
         done = 0
         errors = 0
@@ -672,8 +770,11 @@ def main():
               f"threads={workers}")
         print(f"  black={black:.2f}, range: R={ranges_ref[0]:.2f} "
               f"G={ranges_ref[1]:.2f} B={ranges_ref[2]:.2f} (avg={range_ref:.2f})")
+        K = apply_warmth(K, warmth)
         if auto or rgb_k:
             print(f"  K_R={K[0]:.6f}, K_G={K[1]:.6f}, K_B={K[2]:.6f}")
+        if abs(warmth) > 1e-6:
+            print(f"  Warmth={warmth:+.2f}")
 
         # Process all files with thread pool
         done = 0

@@ -62,15 +62,17 @@ def usage():
         "                    1. RGB balance by star photometry\n"
         "                    2. Background flattening per channel\n"
         "                    3. LRGB combination\n"
-        "  --method M      Combination method: hsl (default) or ratio.\n"
-        "                    hsl:   RGB->HSL, replace L, HSL->RGB\n"
+        "  --method M      Combination method: ratio (default) or hsl.\n"
         "                    ratio: R_new = R * (L_new/L_old)\n"
+        "                    hsl:   RGB->HSL, replace L, HSL->RGB\n"
         "  --saturation S  Saturation boost after combination (default: 1.0).\n"
         "                  L channel tends to desaturate; try 1.1-1.5.\n"
         "  --lightness K   MTF midtones balance on lightness (default: 0.5 = no change).\n"
         "                  K < 0.5 brightens, K > 0.5 darkens.\n"
         "  --mask-center [D]  Exclude central ellipse from background estimation\n"
         "                  (default D=0.6). Used with --auto for bright central objects.\n"
+        "  --warmth W     Color temperature shift (-1..+1, default: 0).\n"
+        "                  W>0: warmer, W<0: cooler. Used with --auto.\n"
         "\n"
         "Examples:\n"
         "  lrgb.py L.fit R.fit G.fit B.fit result.fit\n"
@@ -84,7 +86,7 @@ def usage():
 def parse_args(argv):
     args = argv[1:]
 
-    value_opts = {'--method', '--saturation', '--lightness'}
+    value_opts = {'--method', '--saturation', '--lightness', '--warmth'}
     flag_set = {'--auto'}
     opts = {}
     flags = {}
@@ -131,7 +133,7 @@ def parse_args(argv):
     else:
         usage()
 
-    method = opts.get('--method', 'hsl')
+    method = opts.get('--method', 'ratio')
     if method not in ('hsl', 'ratio'):
         sys.stderr.write("Error: --method must be 'hsl' or 'ratio'\n")
         sys.exit(1)
@@ -148,6 +150,12 @@ def parse_args(argv):
         sys.stderr.write("Error: --lightness must be a number\n")
         sys.exit(1)
 
+    try:
+        warmth = float(opts.get('--warmth', '0.0'))
+    except ValueError:
+        sys.stderr.write("Error: --warmth must be a number\n")
+        sys.exit(1)
+
     return {
         'mode': mode,
         'inputs': inputs,
@@ -157,6 +165,7 @@ def parse_args(argv):
         'lightness': lightness,
         'auto': flags.get('--auto', False),
         'mask_center_d': mask_center_d,
+        'warmth': warmth,
     }
 
 
@@ -360,10 +369,10 @@ def from_01(data, vmax, orig_dtype):
 # Auto pipeline: RGB balance + background flatten
 # =========================================================================
 
-def auto_preprocess(rgb_data, zero_mask, mask_center_d=None):
+def auto_preprocess(rgb_data, zero_mask, mask_center_d=None, warmth=0.0):
     """Run automatic RGB preprocessing pipeline on raw data.
 
-    1. RGB balance by star photometry (autostar)
+    1. RGB balance by star photometry (autostar) + warmth shift
     2. Background flattening per channel
 
     Works on raw float64 data (not normalized to [0,1]).
@@ -374,8 +383,10 @@ def auto_preprocess(rgb_data, zero_mask, mask_center_d=None):
     # Step 1: RGB balance by star photometry
     print("  [auto] RGB balance by star photometry...")
     K, n_stars = rb.compute_star_balance(rgb_data)
+    K = rb.apply_warmth(K, warmth)
     print(f"  [auto] Balance coefficients: R={K[0]:.4f} G={K[1]:.4f} B={K[2]:.4f} "
-          f"({n_stars} stars)")
+          f"({n_stars} stars)"
+          + (f", warmth={warmth:+.2f}" if abs(warmth) > 1e-6 else ""))
 
     # Apply balance: shift to common black, scale by K
     stats = rb.compute_frame_stats(rgb_data, 5, 5)
@@ -447,7 +458,8 @@ def process(config):
 
     # Auto preprocessing pipeline
     if do_auto:
-        auto_preprocess(rgb_data, zero_mask_rgb, config['mask_center_d'])
+        auto_preprocess(rgb_data, zero_mask_rgb, config['mask_center_d'],
+                        config['warmth'])
 
     # Compute normalization scale (max across all channels including L)
     all_valid = np.concatenate([

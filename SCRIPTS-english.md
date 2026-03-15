@@ -1474,6 +1474,7 @@ rgbbalance input_spec output_spec [options]
 - `--kmax N` — percent of brightest pixels for white level estimation (default 5)
 - `--autostar [file]` — star-based white balance: detects stars on G channel, cross-matches with R and B (tolerance 1.5 px), measures flux via aperture photometry, computes K from total star flux ratios. More accurate than `--auto` for narrowband/broadband mixing. Reference from file (default: first input).
 - `--snr N` — SNR threshold for --autostar star detection (default: 38)
+- `--warmth W` — color temperature shift along Planck curve (-1..+1, default 0)
 
 `--rgb`, `--auto`, `--autoeach`, `--autostar` are mutually exclusive. Without any — only background neutralization and inter-frame brightness normalization.
 
@@ -1532,18 +1533,21 @@ Replaces the brightness information in a color image with a higher-quality lumin
 
 **Syntax**:
 ```
-lrgb.py L.fit R.fit G.fit B.fit output.fit [--method hsl|ratio] [--saturation S]
+lrgb.py L.fit R.fit G.fit B.fit output.fit [--method ratio|hsl] [--saturation S] [--warmth W]
 lrgb.py L.fit RGB.fit output.fit [options]
 ```
 
 **Parameters**:
+- `--method M` — ratio (default) or hsl
+- `--saturation S` — saturation boost (default 1.0)
+- `--warmth W` — color temperature shift along Planck curve (-1..+1, default 0)
 - `--auto` — full pipeline: RGB balance + background flatten + LRGB combine
 - `--mask-center` — use central region for background estimation (with `--auto`)
 
 **Examples**:
 ```bash
 lrgb L.fit R.fit G.fit B.fit result.fit
-lrgb L.fit RGB.fit result.fit --method ratio --saturation 1.3
+lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
 lrgb --auto L.fit R.fit G.fit B.fit result.fit
 ```
 

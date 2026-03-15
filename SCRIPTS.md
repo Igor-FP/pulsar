@@ -1516,6 +1516,7 @@ rgbbalance input_spec output_spec [options]
 - `--rgb R G B` — ручные коэффициенты масштабирования каналов
 - `--autostar [file]` — баланс белого по звёздам: детекция звёзд на G канале, кросс-матчинг с R и B (толерантность 1.5 px), апертурная фотометрия, вычисление K по суммарным потокам. Точнее чем `--auto` для узкополосных/широкополосных миксов. Эталон из файла (по умолчанию первый вход)
 - `--snr N` — порог SNR для детекции звёзд в --autostar (по умолчанию 38)
+- `--warmth W` — сдвиг цветовой температуры вдоль кривой Планка (-1..+1, default 0)
 - `--kmin N` — процент тёмных пикселей для оценки чёрного уровня (по умолчанию 5)
 - `--kmax N` — процент ярких пикселей для оценки белого уровня (по умолчанию 5)
 
@@ -1605,8 +1606,8 @@ stack *.fit result.fit --sigma --debug log.txt
 **Назначение**: LRGB композиция — совмещение высокодетального L-канала с цветовыми данными RGB.
 
 **Методы**:
-- `hsl` (default) — RGB→HSL, замена L (после LinearFit), HSL→RGB
-- `ratio` — `R_new = R × (L_new/L_old)`, сохраняет цветовые соотношения точнее
+- `ratio` (default) — `R_new = R × (L_new/L_old)`, сохраняет цветовые соотношения точнее
+- `hsl` — RGB→HSL, замена L (после LinearFit), HSL→RGB
 
 **Синтаксис**:
 ```
@@ -1615,19 +1616,20 @@ lrgb.py L.fit RGB.fit output.fit [options]
 ```
 
 **Параметры**:
-- `--method M` — hsl (default) или ratio
+- `--method M` — ratio (default) или hsl
 - `--saturation S` — boost насыщенности (default 1.0, L подавляет saturation)
+- `--warmth W` — сдвиг цветовой температуры вдоль кривой Планка (-1..+1, default 0)
 - `--lightness K` — MTF на lightness (default 0.5 = identity)
 - `--auto` — полный пайплайн: баланс RGB + выравнивание фона + LRGB-совмещение
 - `--mask-center` — использовать центральную область для оценки фона (для `--auto`)
 
 **Примеры**:
 ```batch
-:: 4 моно файла, HSL метод
+:: 4 моно файла, ratio метод (default)
 lrgb L.fit R.fit G.fit B.fit result.fit
 
-:: L + готовый RGB, ratio метод
-lrgb L.fit RGB.fit result.fit --method ratio
+:: L + готовый RGB, HSL метод
+lrgb L.fit RGB.fit result.fit --method hsl
 
 :: С boost насыщенности
 lrgb L.fit R.fit G.fit B.fit result.fit --saturation 1.3
