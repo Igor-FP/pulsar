@@ -1,0 +1,7 @@
+Stack script TODO
+=================
+
+- Optimize _render_poly2d: cache x^i, y^j power arrays instead of
+  recomputing x**i from scratch for each polynomial term.
+  Called 2x per frame in passes 2-3 (bg render + avrBg), significant
+  for high-resolution images (25M+ pixels, 10 terms for order 3).

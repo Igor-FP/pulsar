@@ -56,6 +56,7 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 ### Stacking
 - Summation with exposure time tracking
 - Median combining (parallel tiled processing)
+- Optimal weighted stacking with sigma-fade clipping (SNR² and FWHM-based weights)
 - Brightness normalization between frames (gain, offset, regression)
 
 ### Astrometry and Alignment
@@ -68,14 +69,17 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 - Crop with autocenter or manual positions from CSV
 
 ### Image Processing
-- Midtone Transfer Function — PixInsight-compatible nonlinear stretch
+- Midtone Transfer Function — PixInsight-compatible nonlinear stretch with auto black/white level detection and multi-K support
+- Background field flattening with cell-based estimation and polynomial fitting
+- LRGB composition (HSL and ratio methods)
+- Auto black/white level detection for screen transfer
 - RGB color balance and brightness normalization
 - Bayer demosaicing (bilinear and VNG methods)
 - Software pixel binning (2×2, 4×4)
 
 ### Conversion
 - Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (currently Canon CR2/CR3)
-- FITS to TIFF (8/16/32-bit, mono and RGB) and TIFF back to FITS with header recovery
+- FITS to TIFF, JPEG, PNG (8/16/32-bit, mono and RGB, auto stretch) and TIFF back to FITS with header recovery
 
 ### Utilities
 - Time-based sorting with session splitting
@@ -120,7 +124,8 @@ On Linux/macOS, run scripts directly: `python Add/add.py --help`
 ```bash
 pip install numpy astropy              # required — core functionality
 pip install scipy                      # autocalibrate, autoflat, autosolve, fft_align, crop, staralign
-pip install sep                        # staralign, bestof, rgbbalance (star detection)
+pip install sep                        # staralign, bestof, rgbbalance, stack (star detection)
+pip install psutil                     # stack (optional, adaptive memory management)
 pip install Pillow                     # fits2tiff, tiff2fits
 pip install rawpy exifread             # raw2fits (CR2 fallback reader)
 pip install reproject                  # autosolve (WCS reprojection)
@@ -204,12 +209,13 @@ autosolve --rectify --align *.fit aligned\
 | **arith.py** | Universal arithmetic |
 | **sum.py** | Stack summation |
 | **med.py** | Median combining |
+| **stack.py** | Optimal weighted stacking with smooth outlier rejection |
 | **calibrate.py** | Calibration (dark/bias/flat/cosme) |
 | **autocalibrate.py** | Auto-calibration with dark/flat matching |
 | **normalize.py** | Brightness normalization (regression) |
 | **ngain.py** | Gain normalization (multiply to target median) |
 | **noffset.py** | Offset normalization (add to target median) |
-| **autoflat.py** | Flat field gradient correction |
+| **autoflat.py** | Background field flattening |
 | **cosme.py** | Hot pixel correction |
 | **make_cosme.py** | Hot pixel list generation |
 | **makedark.py** | Master dark creation |
@@ -217,7 +223,7 @@ autosolve --rectify --align *.fit aligned\
 | **darkopt.py** | Optimized dark subtraction |
 | **sortfits.py** | Time-based sorting |
 | **autosolve.py** | Astrometry and reprojection |
-| **fits2tiff.py** | FITS to TIFF conversion |
+| **fits2tiff.py** | FITS to TIFF/JPEG/PNG conversion |
 | **tiff2fits.py** | TIFF to FITS conversion |
 | **raw2fits.py** | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
 | **staralign.py** | Star-based image registration |
@@ -227,7 +233,8 @@ autosolve --rectify --align *.fit aligned\
 | **crop.py** | Crop FITS images (by size/center or margins) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
-| **mtf.py** | Midtone Transfer Function |
+| **mtf.py** | Nonlinear brightness stretch with auto levels |
+| **lrgb.py** | Combine luminance channel with RGB color |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 
 Full documentation: **[SCRIPTS.md](SCRIPTS-english.md)** (English) | **[SCRIPTS.md](SCRIPTS.md)** (Russian)
@@ -283,6 +290,7 @@ PULSAR/
 ├── Arith/             # arith.py
 ├── Sum/               # sum.py
 ├── Med/               # med.py
+├── Stack/             # stack.py
 ├── Calibrate/         # calibrate.py
 ├── Autocalibrate/     # autocalibrate.py
 ├── Normalize/         # normalize.py
@@ -307,6 +315,7 @@ PULSAR/
 ├── Debayer/           # debayer.py
 ├── Hotfix/            # hotfix.py
 ├── Mtf/               # mtf.py
+├── Lrgb/              # lrgb.py
 ├── Rgbbalance/        # rgbbalance.py
 ├── Samples*/          # Test data
 ├── setup.bat          # Windows one-click installer

@@ -128,14 +128,21 @@ def expand_input_spec(spec: str) -> List[str]:
     if spec.lower().endswith((".txt", ".lst")) and os.path.isfile(spec):
         return _expand_list_file(spec)
 
+    # Explicit single file: =filename (bypass sequence detection)
+    if spec.startswith("="):
+        single = spec[1:]
+        if os.path.isfile(single):
+            return [os.path.abspath(single)]
+        raise FileNotFoundError(f"File not found: {single}")
+
     # Single file or numbered sequence
     if os.path.isfile(spec):
-        # Try numbered sequence
+        # Try numbered sequence (need at least 2 files to be a sequence)
         seq = find_numbered_sequence(spec)
-        if seq:
+        if len(seq) > 1:
             return [name for (name, _, _) in seq]
 
-        # Single FITS (or other) file
+        # Single file
         return [os.path.abspath(spec)]
 
     raise FileNotFoundError(f"Input specification not recognized or file not found: {spec}")

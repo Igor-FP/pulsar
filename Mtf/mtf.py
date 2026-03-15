@@ -17,23 +17,32 @@ Pixel values are normalized to [0,1] using the dtype's full range
 (e.g., uint16: 0..65535) before applying the function, then scaled back.
 This matches PixInsight's internal [0,1] normalization.
 
-Supports 2D (mono) and 3D (color, 3×H×W) FITS images.
+Supports 2D (mono) and 3D (color, 3xH×W) FITS images.
 
-Color modes (3D only):
-  - Independent (default): MTF applied to each channel separately.
-  - --preserve_color: MTF applied to per-pixel average luminance,
-    channels scaled proportionally to preserve R/avg and B/avg ratios.
+Auto black/white level detection:
+  --autoblack   Compute black level from darkest background cells (median - 5*MAD)
+  --autowhite   Compute white level from brightest 0.01% of pixels
+  --auto        Both --autoblack and --autowhite
+
+Color preservation (3D only):
+  --keepcolor [K]  Apply MTF to luminance (R+2G+B)/4, restore color ratios.
+                   K=1: full color preservation. K=0: none (blend with independent).
+  --equal          Use equal-weight luminance (R+G+B)/3 instead of green-weighted.
 """
 
 import sys
 import os
+import warnings
 import numpy as np
 from astropy.io import fits
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import shared utilities (two levels up from Personal/Mtf/)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lib")))
 import batch_utils
+
+# Suppress warnings from nanmedian/nanstd on all-NaN slices
+warnings.filterwarnings('ignore', message='.*All-NaN slice.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message='.*Degrees of freedom <= 0.*', category=RuntimeWarning)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -59,28 +68,44 @@ def usage():
         "                   numbered sequence (img0001.fit), or list (@list.txt)\n"
         "  output_spec      Output: single file, numbered pattern (out0001.fit),\n"
         "                   or directory\n"
-        "  K                Midtones balance (0..1 exclusive)\n"
+        "  K [K2 K3 ...]    One or more midtones balance values (0..1 exclusive).\n"
         "                     K < 0.5 -> brighten midtones\n"
         "                     K = 0.5 -> no change (identity)\n"
         "                     K > 0.5 -> darken midtones\n"
+        "                   Multiple K: result = average of mtf(x,Ki) for each Ki.\n"
+        "                   Duplicate values act as weights (counted multiple times).\n"
+        "                   Example: 0.1 0.1 0.4 -> 2/3 weight on K=0.1, 1/3 on K=0.4\n"
         "\n"
         "Options:\n"
-        "  --preserve_color  For color (3-channel) images: apply MTF to\n"
-        "                    per-pixel average, scale R/G/B proportionally\n"
-        "                    (default: independent per-channel MTF)\n"
-        "  --k2 K2           Second MTF parameter for dual-MTF blending.\n"
-        "                    Result = mtf(x,K)*(1-blend) + mtf(x,K2)*blend\n"
-        "  --blend B         Blend factor for dual MTF (default: 0.5).\n"
-        "                    0.0 = only K, 1.0 = only K2\n"
         "  --clip [P]        After MTF, clip black/white by percentile P\n"
         "                    (default P=0.001). Ignores pixels <= 0.\n"
         "                    Remaps [black_P, white_P] to [0, 1].\n"
         "\n"
+        "Auto black/white (linked for color: shared boundaries):\n"
+        "  --autoblack       Auto black level from darkest background cells.\n"
+        "  --autowhite       Auto white level from brightest 0.01% pixels.\n"
+        "  --auto            Both --autoblack and --autowhite.\n"
+        "\n"
+        "Color options (3-channel images only):\n"
+        "  --keepcolor [K]   Preserve color ratios via luminance scaling.\n"
+        "                    K=1 (default): full color preservation.\n"
+        "                    K=0: no preservation (same as per-channel).\n"
+        "                    0<K<1: blend between per-channel and preserved.\n"
+        "                    Luminance = (R + 2*G + B) / 4 (green-weighted).\n"
+        "  --keepcolor-hsl [K]  Preserve color via HSL: apply MTF to L only,\n"
+        "                    H and S unchanged. Better saturation control\n"
+        "                    for aggressive stretch (K < 0.15).\n"
+        "  --equal           Use equal-weight luminance (R+G+B)/3.\n"
+        "                    Works with both --keepcolor and --keepcolor-hsl.\n"
+        "\n"
         "Examples:\n"
         "  mtf.py img.fit out.fit 0.2\n"
-        "  mtf.py img.fit out.fit 0.15 --k2 0.45\n"
-        "  mtf.py img.fit out.fit 0.15 --k2 0.45 --blend 0.3\n"
-        "  mtf.py img0001.fit out0001.fit 0.25 --preserve_color\n"
+        "  mtf.py img.fit out.fit 0.1 0.2 0.4\n"
+        "  mtf.py img.fit out.fit 0.1 0.1 0.4         (weight K=0.1 x2)\n"
+        "  mtf.py img.fit out.fit 0.15 --auto\n"
+        "  mtf.py img.fit out.fit 0.25 --keepcolor --auto\n"
+        "  mtf.py img.fit out.fit 0.01 --keepcolor-hsl --auto\n"
+        "  mtf.py img.fit out.fit 0.25 --keepcolor 0.7 --equal\n"
     )
     sys.exit(1)
 
@@ -101,59 +126,90 @@ def _parse_k(s, name):
 def parse_args(argv):
     args = argv[1:]
 
-    preserve_color = False
-    k2 = None
-    blend = 0.5
-    clip = None  # None = disabled, float = percentile
+    clip = None
+    keepcolor_k = None      # None = disabled, float = ratio mode
+    keepcolor_hsl_k = None  # None = disabled, float = HSL mode
+    equal_lum = False
+    autoblack = False
+    autowhite = False
 
-    # Extract option flags
     i = 0
     positional = []
     while i < len(args):
-        if args[i] == "--preserve_color":
-            preserve_color = True
+        if args[i] == '--keepcolor-hsl':
+            keepcolor_hsl_k = 1.0  # default
             i += 1
-        elif args[i] == "--clip":
-            clip = 0.001  # default percentile
+            if i < len(args) and not args[i].startswith('--'):
+                try:
+                    keepcolor_hsl_k = float(args[i])
+                    i += 1
+                except ValueError:
+                    pass
+        elif args[i] == '--keepcolor':
+            keepcolor_k = 1.0  # default
             i += 1
-            # Optional percentile value
-            if i < len(args) and not args[i].startswith("--"):
+            # Optional K value
+            if i < len(args) and not args[i].startswith('--'):
+                try:
+                    keepcolor_k = float(args[i])
+                    i += 1
+                except ValueError:
+                    pass
+        elif args[i] == '--equal':
+            equal_lum = True
+            i += 1
+        elif args[i] == '--auto':
+            autoblack = True
+            autowhite = True
+            i += 1
+        elif args[i] == '--autoblack':
+            autoblack = True
+            i += 1
+        elif args[i] == '--autowhite':
+            autowhite = True
+            i += 1
+        elif args[i] == '--preserve_color':
+            # Backward compat: treat as --keepcolor 1
+            keepcolor_k = 1.0
+            i += 1
+        elif args[i] == '--clip':
+            clip = 0.001
+            i += 1
+            if i < len(args) and not args[i].startswith('--'):
                 try:
                     clip = float(args[i])
                     i += 1
                 except ValueError:
                     pass
-        elif args[i] == "--k2":
-            if i + 1 >= len(args):
-                sys.stderr.write("Error: --k2 requires a value.\n")
-                sys.exit(1)
-            k2 = _parse_k(args[i+1], "K2")
-            i += 2
-        elif args[i] == "--blend":
-            if i + 1 >= len(args):
-                sys.stderr.write("Error: --blend requires a value.\n")
-                sys.exit(1)
-            try:
-                blend = float(args[i+1])
-            except ValueError:
-                sys.stderr.write("Error: --blend value must be a number.\n")
-                sys.exit(1)
-            if blend < 0.0 or blend > 1.0:
-                sys.stderr.write("Error: --blend must be in range [0, 1].\n")
-                sys.exit(1)
-            i += 2
         else:
             positional.append(args[i])
             i += 1
 
-    if len(positional) != 3:
+    if len(positional) < 3:
         usage()
 
     input_spec = positional[0]
     output_spec = positional[1]
-    m = _parse_k(positional[2], "K")
 
-    return input_spec, output_spec, m, preserve_color, k2, blend, clip
+    # All remaining positional args are K values
+    ks = []
+    for s in positional[2:]:
+        ks.append(_parse_k(s, "K"))
+
+    if not ks:
+        usage()
+
+    return {
+        'input_spec': input_spec,
+        'output_spec': output_spec,
+        'ks': ks,
+        'clip': clip,
+        'keepcolor_k': keepcolor_k,
+        'keepcolor_hsl_k': keepcolor_hsl_k,
+        'equal_lum': equal_lum,
+        'autoblack': autoblack,
+        'autowhite': autowhite,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -171,80 +227,333 @@ def apply_mtf(x, m):
     num = (1.0 - m) * x
     den = m + x * (1.0 - 2.0 * m)
 
-    # Safe division: den=0 only at extreme m values with x=0 or x=1
     with np.errstate(divide='ignore', invalid='ignore'):
         result = np.where(den != 0.0, num / den, np.where(x <= 0.0, 0.0, 1.0))
 
     return np.clip(result, 0.0, 1.0)
 
 
+def apply_multi_mtf(x, ks):
+    """Apply multiple MTFs and average: result = mean([mtf(x, ki) for ki in ks]).
+
+    Duplicate K values act as weights (counted multiple times in the average).
+    Single K: equivalent to apply_mtf(x, K).
+    """
+    if len(ks) == 1:
+        return apply_mtf(x, ks[0])
+
+    acc = apply_mtf(x, ks[0])
+    for k in ks[1:]:
+        acc = acc + apply_mtf(x, k)
+    acc /= len(ks)
+    return np.clip(acc, 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# HSL color space conversion (vectorized numpy)
+# ---------------------------------------------------------------------------
+
+def _rgb_to_hsl(rgb):
+    """Convert RGB (3, H, W) in [0,1] to HSL (3, H, W) in [0,1]."""
+    r, g, b = rgb[0], rgb[1], rgb[2]
+
+    cmax = np.maximum(np.maximum(r, g), b)
+    cmin = np.minimum(np.minimum(r, g), b)
+    delta = cmax - cmin
+
+    l = (cmax + cmin) / 2.0
+
+    s = np.zeros_like(l)
+    mask = delta > 0
+    low = mask & (l <= 0.5)
+    high = mask & (l > 0.5)
+    denom_low = cmax[low] + cmin[low]
+    denom_high = 2.0 - cmax[high] - cmin[high]
+    s[low] = np.where(denom_low > 0, delta[low] / denom_low, 0.0)
+    s[high] = np.where(denom_high > 0, delta[high] / denom_high, 0.0)
+
+    h = np.zeros_like(l)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        inv_delta = np.where(delta > 0, 1.0 / delta, 0.0)
+
+    rm = mask & (cmax == r)
+    h[rm] = ((g[rm] - b[rm]) * inv_delta[rm]) % 6.0
+
+    gm = mask & (cmax == g) & ~rm
+    h[gm] = (b[gm] - r[gm]) * inv_delta[gm] + 2.0
+
+    bm = mask & ~rm & ~gm
+    h[bm] = (r[bm] - g[bm]) * inv_delta[bm] + 4.0
+
+    h /= 6.0
+    h = h % 1.0
+
+    return np.stack([h, s, l], axis=0)
+
+
+def _hsl_to_rgb(hsl):
+    """Convert HSL (3, H, W) in [0,1] to RGB (3, H, W) in [0,1]."""
+    h, s, l = hsl[0], hsl[1], hsl[2]
+
+    c = (1.0 - np.abs(2.0 * l - 1.0)) * s
+    hp = h * 6.0
+    x = c * (1.0 - np.abs(hp % 2.0 - 1.0))
+    m = l - c / 2.0
+
+    r = np.zeros_like(h)
+    g = np.zeros_like(h)
+    b = np.zeros_like(h)
+
+    for lo, hi, rv, gv, bv in [
+        (0, 1, 'c', 'x', '0'), (1, 2, 'x', 'c', '0'),
+        (2, 3, '0', 'c', 'x'), (3, 4, '0', 'x', 'c'),
+        (4, 5, 'x', '0', 'c'), (5, 6, 'c', '0', 'x'),
+    ]:
+        mask = (hp >= lo) & (hp < hi)
+        for ch, val in [(r, rv), (g, gv), (b, bv)]:
+            if val == 'c':
+                ch[mask] = c[mask]
+            elif val == 'x':
+                ch[mask] = x[mask]
+
+    return np.clip(np.stack([r + m, g + m, b + m], axis=0), 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Auto black/white detection
+# ---------------------------------------------------------------------------
+
+def _compute_autoblack(plane_01):
+    """Compute auto black level for a single 2D plane in [0,1] space.
+
+    Uses darkest 3% of background cells (min 1 cell).
+    Black = median - 5.0 * MAD of pixels in those cells.
+    """
+    from background import _build_cell_grid
+
+    cell_size = 64
+    h, w = plane_01.shape
+
+    # Build cell grid (sigma-clipped medians per cell)
+    grid = _build_cell_grid(plane_01, cell_size, clip_k=1.7)
+    ny, nx = grid.shape
+
+    # Find darkest 3% of non-zero cells
+    valid_mask = grid > 0
+    valid_values = grid[valid_mask]
+    if valid_values.size == 0:
+        return 0.0
+
+    n_dark = max(1, int(valid_values.size * 0.03))
+    threshold = np.partition(valid_values, n_dark)[n_dark - 1]
+
+    # Get cell indices where grid value <= threshold and > 0
+    dark_cells = np.argwhere((grid <= threshold) & (grid > 0))
+
+    # Collect original pixels from those cells
+    pixels = []
+    for cy, cx in dark_cells:
+        y0 = cy * cell_size
+        y1 = min(y0 + cell_size, h)
+        x0 = cx * cell_size
+        x1 = min(x0 + cell_size, w)
+        cell = plane_01[y0:y1, x0:x1].ravel()
+        cell = cell[cell > 0]  # exclude zeros
+        if cell.size > 0:
+            pixels.append(cell)
+
+    if not pixels:
+        return 0.0
+
+    all_pixels = np.concatenate(pixels)
+    med = float(np.median(all_pixels))
+    mad = float(np.median(np.abs(all_pixels - med)))
+
+    black = med - 5.0 * mad
+    return max(0.0, black)
+
+
+def _compute_autowhite(plane_01):
+    """Compute auto white level for a single 2D plane in [0,1] space.
+
+    White = median of top 0.01% of non-zero pixels.
+    """
+    valid = plane_01[plane_01 > 0].ravel()
+    if valid.size == 0:
+        return 1.0
+
+    n_bright = max(1, int(valid.size * 0.0001))
+    idx = valid.size - n_bright
+    partitioned = np.partition(valid, idx)
+    white = float(np.median(partitioned[idx:]))
+
+    return min(1.0, max(white, 0.01))
+
+
+def compute_auto_levels(work, autoblack, autowhite):
+    """Compute auto black/white levels. Returns (black, white).
+
+    For 3D color images: linked mode.
+      black = min(per-channel blacks)
+      white = max(per-channel whites)
+    For 2D mono: computed directly.
+    """
+    black = 0.0
+    white = 1.0
+
+    if work.ndim == 2:
+        if autoblack:
+            black = _compute_autoblack(work)
+        if autowhite:
+            white = _compute_autowhite(work)
+    elif work.ndim == 3 and work.shape[0] == 3:
+        if autoblack:
+            blacks = [_compute_autoblack(work[ch]) for ch in range(3)]
+            black = min(blacks)
+        if autowhite:
+            whites = [_compute_autowhite(work[ch]) for ch in range(3)]
+            white = max(whites)
+
+    return black, white
+
+
+def apply_black_white(work, black, white):
+    """Remap data from [black, white] to [0, 1]. Preserves zeros."""
+    if black == 0.0 and white >= 1.0:
+        return work  # no-op
+
+    bw_range = white - black
+    if bw_range <= 0:
+        return work
+
+    zero_mask = work <= 0
+    result = (work - black) / bw_range
+    result = np.clip(result, 0.0, 1.0)
+    result[zero_mask] = 0.0
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Color preservation
+# ---------------------------------------------------------------------------
+
+def apply_mtf_keepcolor(work_3d, ks, keepcolor_k, equal_lum):
+    """Apply MTF with color preservation.
+
+    1. Compute luminance L_old
+    2. Apply MTF to luminance: L_new = multi_MTF(L_old)
+    3. Restore colors: ch_new = (ch_old / L_old) * L_new
+    4. Blend with per-channel MTF result by keepcolor_k
+    """
+    # Compute luminance
+    if equal_lum:
+        lum_old = np.mean(work_3d, axis=0)  # (R+G+B)/3
+    else:
+        lum_old = (work_3d[0] + 2.0 * work_3d[1] + work_3d[2]) / 4.0  # (R+2G+B)/4
+
+    # Apply MTF to luminance
+    lum_new = apply_multi_mtf(lum_old, ks)
+
+    # Scale channels by luminance ratio
+    with np.errstate(divide='ignore', invalid='ignore'):
+        scale = np.where(lum_old > 0.0, lum_new / lum_old, 0.0)
+
+    preserved = work_3d * scale[np.newaxis, :, :]
+    preserved = np.clip(preserved, 0.0, 1.0)
+
+    # If keepcolor_k == 1, return fully preserved
+    if keepcolor_k >= 1.0:
+        return preserved
+
+    # If keepcolor_k == 0, return per-channel MTF
+    if keepcolor_k <= 0.0:
+        return apply_multi_mtf(work_3d, ks)
+
+    # Blend: result = per_channel * (1-K) + preserved * K
+    per_channel = apply_multi_mtf(work_3d, ks)
+    return per_channel * (1.0 - keepcolor_k) + preserved * keepcolor_k
+
+
+def apply_mtf_keepcolor_hsl(work_3d, ks, keepcolor_k):
+    """Apply MTF with color preservation via HSL color space.
+
+    1. Convert RGB to HSL
+    2. Apply multi-MTF to L channel only (H and S unchanged)
+    3. Convert back to RGB
+    4. Blend with per-channel MTF result by keepcolor_k
+
+    Better saturation preservation than ratio method for aggressive stretch.
+    """
+    hsl = _rgb_to_hsl(work_3d)
+
+    # Apply MTF only to L channel
+    hsl[2] = apply_multi_mtf(hsl[2], ks)
+
+    preserved = _hsl_to_rgb(hsl)
+
+    if keepcolor_k >= 1.0:
+        return preserved
+
+    if keepcolor_k <= 0.0:
+        return apply_multi_mtf(work_3d, ks)
+
+    per_channel = apply_multi_mtf(work_3d, ks)
+    return per_channel * (1.0 - keepcolor_k) + preserved * keepcolor_k
+
+
 # ---------------------------------------------------------------------------
 # Normalization helpers
 # ---------------------------------------------------------------------------
 
+_norm_scale = {'min': 0.0, 'max': 1.0}  # set by normalize_to_01, used by denormalize
+
+
 def normalize_to_01(data, orig_dtype):
-    """Normalize data to [0, 1] range based on dtype."""
+    """Normalize data to [0, 1] range.
+
+    Integer types: uses dtype range (0..65535 for uint16, etc).
+    Float types: uses actual data range (0..max_value).
+    """
+    global _norm_scale
     work = data.astype(np.float64)
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
-        work = (work - info.min) / (info.max - info.min)
+        _norm_scale = {'min': float(info.min), 'max': float(info.max)}
+        work = (work - info.min) / float(info.max - info.min)
     else:
-        # Float: clip to [0, 1]
+        # Float: normalize by actual data range
+        valid = work[work > 0] if np.any(work > 0) else work.ravel()
+        vmax = float(np.max(valid)) if valid.size > 0 else 1.0
+        if vmax <= 0:
+            vmax = 1.0
+        _norm_scale = {'min': 0.0, 'max': vmax}
+        work = work / vmax
         np.clip(work, 0.0, 1.0, out=work)
     return work
 
 
 def denormalize_from_01(data, orig_dtype):
-    """Convert [0, 1] data back to original dtype range."""
+    """Convert [0, 1] data back to original range."""
+    vmin = _norm_scale['min']
+    vmax = _norm_scale['max']
+    work = data * (vmax - vmin) + vmin
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
-        work = data * (info.max - info.min) + info.min
         work = np.clip(work, info.min, info.max)
         work = np.rint(work)
         return work.astype(orig_dtype)
     if np.issubdtype(orig_dtype, np.floating):
-        arr = data.astype(orig_dtype)
+        arr = work.astype(orig_dtype)
         bad = ~np.isfinite(arr)
         if np.any(bad):
             arr[bad] = 0
         return arr
-    return data.astype(np.float32)
+    return work.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
-# File processing
+# Clip (legacy)
 # ---------------------------------------------------------------------------
-
-def apply_dual_mtf(x, m1, m2, blend):
-    """Apply two MTFs and blend: result = mtf(x,m1)*(1-blend) + mtf(x,m2)*blend."""
-    r1 = apply_mtf(x, m1)
-    r2 = apply_mtf(x, m2)
-    return r1 * (1.0 - blend) + r2 * blend
-
-
-def apply_mtf_preserve_color(work_3d, m, k2, blend):
-    """Apply MTF to 3-channel image preserving color ratios.
-
-    MTF is applied to the per-pixel average (luminance).
-    Each channel is then scaled by new_avg/avg to preserve R/avg, B/avg ratios.
-    """
-    # Per-pixel average across channels (shape: H, W)
-    avg = np.mean(work_3d, axis=0)
-
-    # Apply MTF (single or dual) to average
-    if k2 is not None:
-        new_avg = apply_dual_mtf(avg, m, k2, blend)
-    else:
-        new_avg = apply_mtf(avg, m)
-
-    # Scale factor: new_avg / avg, protect division by zero
-    with np.errstate(divide='ignore', invalid='ignore'):
-        scale = np.where(avg > 0.0, new_avg / avg, 0.0)
-
-    # Scale all channels by the same factor
-    result = work_3d * scale[np.newaxis, :, :]
-    return np.clip(result, 0.0, 1.0)
-
 
 def clip_black_white(work, clip_pct, orig_dtype):
     """Clip black/white levels by percentile and remap with margin.
@@ -252,10 +561,8 @@ def clip_black_white(work, clip_pct, orig_dtype):
     Ignores pixels <= 0 (zero-padded regions from crop).
     Works on normalized [0, 1] data. Applied per-channel for 3D.
 
-    Remaps [black_pct, white_pct] → [margin_lo, 1 - margin_hi]
-    so the clipped percentile is not lost but pushed to a small offset.
+    Remaps [black_pct, white_pct] -> [margin_lo, 1 - margin_hi]
     """
-    # Compute margins in normalized [0, 1] space
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
         full_range = float(info.max - info.min)
@@ -284,7 +591,6 @@ def clip_black_white(work, clip_pct, orig_dtype):
         if white <= black:
             return plane
 
-        # Preserve zeros, remap [black, white] → [dst_lo, dst_hi]
         zero_mask = plane <= 0
         result = dst_lo + (plane - black) / (white - black) * (dst_hi - dst_lo)
         result = np.clip(result, 0.0, 1.0)
@@ -294,8 +600,6 @@ def clip_black_white(work, clip_pct, orig_dtype):
     if work.ndim == 2:
         return _clip_plane(work)
 
-    # 3D color: compute black/white from average across channels,
-    # apply same remap to all channels to preserve color balance
     avg = np.mean(work, axis=0)
     valid = avg[avg > 0]
     if len(valid) == 0:
@@ -321,8 +625,20 @@ def clip_black_white(work, clip_pct, orig_dtype):
     return result
 
 
-def process_file(infile, outfile, m, preserve_color, k2, blend, clip):
+# ---------------------------------------------------------------------------
+# File processing
+# ---------------------------------------------------------------------------
+
+def process_file(infile, outfile, config):
     """Process a single FITS file."""
+    ks = config['ks']
+    clip = config['clip']
+    keepcolor_k = config['keepcolor_k']
+    keepcolor_hsl_k = config['keepcolor_hsl_k']
+    equal_lum = config['equal_lum']
+    do_autoblack = config['autoblack']
+    do_autowhite = config['autowhite']
+
     with fits.open(infile, memmap=False) as hdul:
         if hdul[0].data is None:
             raise ValueError("No primary image data.")
@@ -334,16 +650,24 @@ def process_file(infile, outfile, m, preserve_color, k2, blend, clip):
     # Normalize to [0, 1]
     work = normalize_to_01(data, orig_dtype)
 
+    # Auto black/white detection
+    black, white = 0.0, 1.0
+    if do_autoblack or do_autowhite:
+        black, white = compute_auto_levels(work, do_autoblack, do_autowhite)
+
+    # Apply black/white remapping
+    work = apply_black_white(work, black, white)
+
     # Apply MTF
     is_color = (work.ndim == 3 and work.shape[0] == 3)
-    if is_color and preserve_color:
-        work = apply_mtf_preserve_color(work, m, k2, blend)
-    elif k2 is not None:
-        work = apply_dual_mtf(work, m, k2, blend)
+    if is_color and keepcolor_hsl_k is not None and keepcolor_hsl_k > 0:
+        work = apply_mtf_keepcolor_hsl(work, ks, keepcolor_hsl_k)
+    elif is_color and keepcolor_k is not None and keepcolor_k > 0:
+        work = apply_mtf_keepcolor(work, ks, keepcolor_k, equal_lum)
     else:
-        work = apply_mtf(work, m)
+        work = apply_multi_mtf(work, ks)
 
-    # Optional black/white clip
+    # Optional percentile clip (legacy)
     if clip is not None:
         work = clip_black_white(work, clip, orig_dtype)
 
@@ -355,14 +679,20 @@ def process_file(infile, outfile, m, preserve_color, k2, blend, clip):
         if key in header:
             del header[key]
 
-    mode_str = "preserve_color" if (is_color and preserve_color) else "independent"
-    if k2 is not None:
-        header["HISTORY"] = (
-            f"MTF applied by mtf.py: K={m}, K2={k2}, blend={blend}, mode={mode_str}")
-    else:
-        header["HISTORY"] = f"MTF applied by mtf.py: m={m}, mode={mode_str}"
+    # Build HISTORY
+    ks_str = " ".join(f"{k:g}" for k in ks)
+    parts = [f"K=[{ks_str}]"]
+    if do_autoblack or do_autowhite:
+        parts.append(f"black={black:.6f}, white={white:.6f}")
+    if is_color and keepcolor_hsl_k is not None:
+        parts.append(f"keepcolor-hsl={keepcolor_hsl_k}")
+    elif is_color and keepcolor_k is not None:
+        lum_str = "equal" if equal_lum else "green"
+        parts.append(f"keepcolor={keepcolor_k}, lum={lum_str}")
     if clip is not None:
-        header["HISTORY"] = f"  clip={clip}%"
+        parts.append(f"clip={clip}%")
+
+    header["HISTORY"] = f"MTF applied by mtf.py: {', '.join(parts)}"
 
     out_dir = os.path.dirname(outfile)
     if out_dir and not os.path.exists(out_dir):
@@ -376,10 +706,11 @@ def process_file(infile, outfile, m, preserve_color, k2, blend, clip):
 # ---------------------------------------------------------------------------
 
 def main():
-    input_spec, output_spec, m, preserve_color, k2, blend, clip = parse_args(sys.argv)
+    config = parse_args(sys.argv)
 
     try:
-        io_pairs = batch_utils.build_io_file_lists(input_spec, output_spec)
+        io_pairs = batch_utils.build_io_file_lists(
+            config['input_spec'], config['output_spec'])
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
@@ -389,13 +720,20 @@ def main():
         sys.exit(1)
 
     total = len(io_pairs)
-    parts = [f"K={m}"]
-    if k2 is not None:
-        parts.append(f"K2={k2}, blend={blend}")
-    if preserve_color:
-        parts.append("preserve_color")
-    if clip is not None:
-        parts.append(f"clip={clip}%")
+    ks_str = " ".join(f"{k:g}" for k in config['ks'])
+    parts = [f"K=[{ks_str}]" if len(config['ks']) > 1 else f"K={config['ks'][0]:g}"]
+    if config['autoblack']:
+        parts.append("autoblack")
+    if config['autowhite']:
+        parts.append("autowhite")
+    if config['keepcolor_hsl_k'] is not None:
+        parts.append(f"keepcolor-hsl={config['keepcolor_hsl_k']}")
+    elif config['keepcolor_k'] is not None:
+        lum = "equal" if config['equal_lum'] else "green"
+        parts.append(f"keepcolor={config['keepcolor_k']}, lum={lum}")
+    if config['clip'] is not None:
+        parts.append(f"clip={config['clip']}%")
+
     ncpu = os.cpu_count() or 1
     workers = min(max(1, ncpu - 1), total)
     print(f"Applying MTF ({', '.join(parts)}) to {total} file(s), threads={workers}")
@@ -405,7 +743,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(process_file, infile, outfile, m, preserve_color, k2, blend, clip):
+            pool.submit(process_file, infile, outfile, config):
                 os.path.basename(infile)
             for infile, outfile in io_pairs
         }
@@ -415,13 +753,13 @@ def main():
             done += 1
             try:
                 future.result()
-                sys.stderr.write(f"\r{done}/{total}")
-                sys.stderr.flush()
+                sys.stdout.write(f"\r{done}/{total}")
+                sys.stdout.flush()
             except Exception as e:
                 errors += 1
                 sys.stderr.write(f"\n  Error '{fname}': {e}\n")
 
-    sys.stderr.write(f"\nDone. {done - errors} OK, {errors} errors.\n")
+    print(f"\nDone. {done - errors} OK, {errors} errors.")
 
 
 if __name__ == "__main__":

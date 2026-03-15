@@ -20,7 +20,7 @@
 | **normalize.py** | Нормализация яркости между кадрами (линейная регрессия) |
 | **ngain.py** | Нормализация умножением (приведение медианы к целевому значению) |
 | **noffset.py** | Нормализация смещением (приведение медианы к целевому значению) |
-| **autoflat.py** | Выравнивание градиента (полиномиальная коррекция) |
+| **autoflat.py** | Выравнивание фона изображений |
 | **cosme.py** | Коррекция горячих пикселей по списку |
 | **make_cosme.py** | Генерация списка горячих пикселей из дарка |
 | **makedark.py** | Создание master dark и cosme.lst из сырых дарков |
@@ -29,7 +29,7 @@
 | **darkopt.py** | Вычитание мастердарка с оптимизацией (подбор коэффициента) |
 | **sortfits.py** | Сортировка FITS по времени, разбиение на сессии |
 | **autosolve.py** | Астрометрическое решение (WCS), ректификация, выравнивание |
-| **fits2tiff.py** | Конвертация FITS → TIFF (8/16/32-bit) |
+| **fits2tiff.py** | Конвертация FITS в TIFF, JPEG, PNG |
 | **tiff2fits.py** | Конвертация TIFF → FITS |
 | **raw2fits.py** | Конвертация Camera RAW → FITS (пока только Canon CR2/CR3) |
 | **fft_align.py** | FFT-выравнивание кадров (Эспериментальный) |
@@ -38,7 +38,9 @@
 | **crop.py** | Обрезка FITS-изображений (по размеру/центру или полям) |
 | **debayer.py** | Демозаик Bayer-паттерна в RGB |
 | **hotfix.py** | Поиск и удаление одиночных горячих пикселей |
-| **mtf.py** | Midtone Transfer Function (нелинейное преобразование яркости) |
+| **lrgb.py** | LRGB композиция (совмещение L-канала с цветом) |
+| **mtf.py** | Нелинейное преобразование яркости (авто уровни, сохранение цвета) |
+| **stack.py** | Оптимальное взвешенное сложение с плавным отсечением выбросов |
 | **rgbbalance.py** | Баланс цвета и яркости для RGB FITS |
 | **bestof.py** | Отбор лучших кадров по FWHM (качество атмосферы) |
 | **rgb.py** | Объединение/разделение RGB каналов |
@@ -53,6 +55,7 @@
 
 - **Одиночный файл**: `image.fit`
 - **Нумерованная последовательность**: `light0001.fit` → автоматически находит light0002.fit, light0003.fit, ...
+- **Принудительно одиночный файл**: `=image.fit` — префикс `=` отключает поиск последовательности
 - **Маска с wildcards**: `*.fit`, `light_*.fit`
 - **Файл-список**: `@list.txt` или `list.txt` (по одному пути на строку)
 
@@ -541,30 +544,36 @@ noffset light0001.fit out0001.fit 10000
 
 ### autoflat.py
 
-**Назначение**: Выравнивание градиента на flat-кадрах (полиномиальная коррекция фона).
+**Назначение**: Выравнивание фона изображений (два режима: cell-based и min-binning).
 
-**Алгоритм**:
-1. Расширение маски нулевых пикселей
-2. Медианная фильтрация
-3. Min-биннинг для получения фона
-4. Полиномиальная аппроксимация поверхности
-5. Коррекция: `result = input - model + offset`
+**Mode 1 (default)** — cell-based:
+1. Разбивка на ячейки → sigma-clipped медиана (отсечение звёзд)
+2. Медиан-фильтр на сетке (нули игнорируются через sentinel)
+3. Расширение сетки за края кадра
+4. Второй медиан-фильтр на расширенной сетке
+5. Полиномиальный фит (нулевые ячейки исключены)
+6. `result = input - model + median(model)`
+
+**Mode 2** — min-binning (оригинальный алгоритм):
+1. Расширение маски нулевых пикселей → медианная фильтрация → min-биннинг → полином
 
 **Синтаксис**:
 ```
-autoflat.py [-d] input_spec output_spec [poly_order]
+autoflat.py [-d] [--mode {1,2}] input_spec [output_spec] [options]
 ```
 
-**Параметры**:
-- `-d` — debug режим (сохраняет промежуточные изображения)
-- `input_spec` — входные файлы
-- `output_spec` — выходные файлы
-- `poly_order` — порядок полинома (по умолчанию 1: плоскость)
+**Опции вывода**: `--save FILE` (модель фона), `--subtract` (вычесть модель). По умолчанию `--subtract`.
+
+**Опции Mode 1**: `--cell N` (64), `--clip K` (1.7), `--poly N` (3), `--median1 N` (3), `--median2 N` (5), `--border N` (2), `--mask-center [D]` (маска центрального объекта).
+
+**Опции Mode 2**: `--poly N` (1), `--radius N` (2).
 
 **Примеры**:
 ```batch
-autoflat flat0001.fit corrected0001.fit
-autoflat -d flat.fit debug_flat.fit 2
+autoflat input.fit output.fit
+autoflat input.fit output.fit --poly 4 --mask-center
+autoflat input.fit --save model.fit --subtract output.fit
+autoflat --mode 2 input.fit output.fit
 ```
 
 ---
@@ -857,28 +866,38 @@ solve-field --help
 
 ### fits2tiff.py
 
-**Назначение**: Конвертация FITS-изображений в формат TIFF.
+**Назначение**: Конвертация FITS-изображений в TIFF, JPEG или PNG.
 
 **Особенности**:
+- Выходной формат определяется расширением файла (`.tif`, `.jpg`, `.png`) или флагом `--format`
 - Выбор битности: 8-bit (stretch), 16-bit (clamp), 32-bit float (нормализация к [0,1])
 - Автоопределение битности по типу данных FITS
 - Wildcard в выходном шаблоне: `*.tif` сохраняет имена входных файлов
 - 32-bit float нормализуется к [0.0, 1.0] для совместимости с Photoshop
+- `--stretch` — авто screen transfer (MTF-подобный нелинейный stretch)
+- `--keepcolor` — сохранение цвета при stretch (растягивает яркость, масштабирует RGB)
+- `--bin 2|4` — даунсэмплинг (аналог биннинга) перед сохранением
+- `--jpeg Q` — качество JPEG (1-100, по умолчанию 95)
 
 **Зависимости**: Pillow (`pip install Pillow`)
 
 **Синтаксис**:
 ```
-fits2tiff.py [--bits 8|16|32] [--flip] input_spec output_spec
+fits2tiff.py [--bits 8|16|32] [--format tiff|jpeg|png] [--stretch] [--keepcolor] [--bin 2|4] [--jpeg Q] [--flip] input_spec output_spec
 ```
 
 **Параметры**:
 - `input_spec` — входные файлы (стандартные форматы: файл, маска, последовательность, @список)
-- `output_spec` — выходной файл `.tif`/`.tiff`, нумерованный шаблон (`out0001.tif`) или wildcard (`*.tif`)
+- `output_spec` — выходной файл `.tif`/`.jpg`/`.png`, нумерованный шаблон или wildcard
 - `--bits 8` — линейный stretch [min,max] → [0,255], uint8
 - `--bits 16` — clamp к [0,65535], uint16
 - `--bits 32` — нормализация [min,max] → [0.0,1.0], float32
 - (без --bits) — авто: int8/uint8→8, int16/uint16→16, остальное→32
+- `--format F` — формат выхода: tiff, jpeg, png (по умолчанию по расширению)
+- `--stretch` — нелинейный авто stretch для экранного отображения
+- `--keepcolor` — сохранение цвета при stretch
+- `--bin 2|4` — даунсэмплинг в 2 или 4 раза
+- `--jpeg Q` — качество JPEG (1-100)
 - `--flip` — вертикальное отражение (FITS bottom-left → TIFF top-left)
 
 **Примеры**:
@@ -891,6 +910,9 @@ fits2tiff *.fit *.tif
 
 :: 8-bit для превью
 fits2tiff --bits 8 light0001.fit preview0001.tif
+
+:: JPEG с авто stretch для превью
+fits2tiff --stretch --bin 2 *.fit *.jpg
 
 :: Нумерованный выход
 fits2tiff --bits 16 *.fit out0001.tif
@@ -1436,35 +1458,43 @@ hotfix img0001.fit out0001.fit --sigma 4 --cold
 
 ### mtf.py
 
-**Назначение**: Midtone Transfer Function (как в PixInsight PixelMath).
+**Назначение**: Midtone Transfer Function (PixInsight-совместимая) с auto black/white и сохранением цвета.
 
 Применяет нелинейную кривую тона: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
 
 Кривая проходит через (0,0), (m, 0.5), (1,1), где m — баланс средних тонов.
-Значения пикселей нормализуются в [0,1] по диапазону типа данных (uint16: 0..65535).
-Поддерживает 2D и 3D FITS.
 
 **Синтаксис**:
 ```
-mtf input_spec output_spec K [options]
+mtf input_spec output_spec K [K2 K3 ...] [options]
 ```
 
 **Параметры**:
-- `K` — баланс средних тонов (0..1). K<0.5 осветляет, K=0.5 тождество, K>0.5 затемняет
-- `--preserve_color` — цветные: MTF по среднему, масштаб R/G/B пропорционально
-- `--k2 K2` — второй параметр MTF для двойного наложения
-- `--blend B` — фактор смешивания (0.0 = только K, 1.0 = только K2, по умолчанию 0.5)
+- `K [K2 K3 ...]` — один или несколько значений midtones balance (0..1). Несколько K: результат = среднее MTF по всем K. Дубликаты = веса.
+- `--auto` — автоматическое определение black/white уровней (linked для цветных)
+- `--autoblack` / `--autowhite` — по отдельности
+- `--keepcolor [K]` — сохранение цвета через luminance ratio (K=1 полное, K<1 blend)
+- `--keepcolor-hsl [K]` — сохранение через HSL (лучше для агрессивного stretch)
+- `--equal` — равновесная luminance (R+G+B)/3 вместо (R+2G+B)/4
+- `--clip [P]` — клиппинг по перцентилю
+
+**Auto black**: 3% самых тёмных ячеек фона → median - 5×MAD.
+**Auto white**: медиана верхних 0.01% пикселей.
+**Linked** для цвета: black = min(channels), white = max(channels).
 
 **Примеры**:
 ```batch
 :: Осветлить средние тона
-mtf img0001.fit out0001.fit 0.2
+mtf img.fit out.fit 0.2
 
-:: С сохранением цвета
-mtf img0001.fit out0001.fit 0.25 --preserve_color
+:: Мульти-MTF: тени + хайлайты
+mtf img.fit out.fit 0.1 0.1 0.4
 
-:: Двойное MTF наложение
-mtf img.fit out.fit 0.15 --k2 0.45 --blend 0.3
+:: С автоматическими границами
+mtf img.fit out.fit 0.15 --auto
+
+:: Агрессивный stretch с HSL сохранением цвета
+mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
 ```
 
 ---
@@ -1514,6 +1544,96 @@ rgbbalance img0001.fit out0001.fit
 :: Баланс белого по звёздам
 rgbbalance img.fit out.fit --autostar
 rgbbalance img0001.fit out0001.fit --autostar ref.fit --snr 50
+```
+
+---
+
+### stack.py
+
+**Назначение**: Оптимальное взвешенное сложение с sigma-fade отсечением.
+
+Многопроходный алгоритм: анализ кадров → взвешенное среднее → итеративный sigma-clip с плавным подавлением выбросов. Вес каждого кадра определяется по SNR² и/или FWHM.
+
+**Алгоритм**:
+1. **Pass 0**: Анализ — детекция звёзд, измерение SNR/FWHM, кэш фона
+2. **Pass 1**: Взвешенное среднее нормализованных кадров
+3. **Pass 2**: RMS deviation map (bg-subtracted сравнение)
+4. **Pass 3**: Sigma-clip с fade (оригинальные значения в сумму)
+5. Итерации 2+: повтор passes 2-3 с уточнённым средним
+
+**Синтаксис**:
+```
+stack.py input_spec output.fit [options]
+```
+
+**Sigma clipping** (без `--sigma` — простая взвешенная сумма):
+- `--sigma [N]` — порог (default 2.3)
+- `--fade N` — ширина fade (default 0.7). Диапазон отсечения: [sigma .. sigma+fade]
+- `--iter [N]` — итерации (default 2)
+
+**Веса**:
+- По умолчанию: SNR² (кадры с лучшим соотношением сигнал/шум получают больший вес)
+- `--fwhm [K]` — добавить вес по FWHM: weight *= MTF(FWHM_rank, K)
+- `--nosnr` — отключить SNR² (только FWHM)
+
+**Прочее**: `--border N` (1), `--threads N`, `--debug [FILE]`
+
+**Фон**: `--cell N` (64), `--clip K` (1.7), `--poly N` (3), `--mask-center [D]`
+
+**Примеры**:
+```batch
+:: Простое взвешенное сложение (без sigma)
+stack *.fit result.fit
+
+:: С sigma-clip (по умолчанию sigma=2.3, fade=0.7, 2 итерации)
+stack *.fit result.fit --sigma
+
+:: Вес по SNR² и FWHM
+stack *.fit result.fit --sigma --fwhm
+
+:: Только по FWHM, без SNR
+stack *.fit result.fit --fwhm --nosnr
+
+:: С debug логом
+stack *.fit result.fit --sigma --debug log.txt
+```
+
+---
+
+### lrgb.py
+
+**Назначение**: LRGB композиция — совмещение высокодетального L-канала с цветовыми данными RGB.
+
+**Методы**:
+- `hsl` (default) — RGB→HSL, замена L (после LinearFit), HSL→RGB
+- `ratio` — `R_new = R × (L_new/L_old)`, сохраняет цветовые соотношения точнее
+
+**Синтаксис**:
+```
+lrgb.py L.fit R.fit G.fit B.fit output.fit [options]
+lrgb.py L.fit RGB.fit output.fit [options]
+```
+
+**Параметры**:
+- `--method M` — hsl (default) или ratio
+- `--saturation S` — boost насыщенности (default 1.0, L подавляет saturation)
+- `--lightness K` — MTF на lightness (default 0.5 = identity)
+- `--auto` — полный пайплайн: баланс RGB + выравнивание фона + LRGB-совмещение
+- `--mask-center` — использовать центральную область для оценки фона (для `--auto`)
+
+**Примеры**:
+```batch
+:: 4 моно файла, HSL метод
+lrgb L.fit R.fit G.fit B.fit result.fit
+
+:: L + готовый RGB, ratio метод
+lrgb L.fit RGB.fit result.fit --method ratio
+
+:: С boost насыщенности
+lrgb L.fit R.fit G.fit B.fit result.fit --saturation 1.3
+
+:: Полный автоматический пайплайн
+lrgb --auto L.fit R.fit G.fit B.fit result.fit
 ```
 
 ---

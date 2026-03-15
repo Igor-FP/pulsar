@@ -20,7 +20,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **normalize.py** | Brightness normalization between frames (linear regression) |
 | **ngain.py** | Gain normalization (scale median to target value) |
 | **noffset.py** | Offset normalization (shift median to target value) |
-| **autoflat.py** | Flat field gradient correction (polynomial fitting) |
+| **autoflat.py** | Background field flattening |
 | **cosme.py** | Hot pixel correction from coordinate list |
 | **make_cosme.py** | Hot pixel list generation from dark frame |
 | **makedark.py** | Master dark and cosme.lst creation from raw darks |
@@ -29,7 +29,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **darkopt.py** | Optimized dark subtraction (K coefficient fitting) |
 | **sortfits.py** | FITS sorting by time, session splitting |
 | **autosolve.py** | Astrometric solving (WCS), reprojection, alignment |
-| **fits2tiff.py** | FITS to TIFF conversion (8/16/32-bit) |
+| **fits2tiff.py** | Convert FITS to TIFF, JPEG, PNG |
 | **tiff2fits.py** | TIFF to FITS conversion (with header recovery) |
 | **raw2fits.py** | Camera RAW to FITS conversion (raw Bayer CFA, currently Canon CR2/CR3) |
 | **fft_align.py** | FFT-based frame alignment (rotation, scale, shift) |
@@ -38,7 +38,9 @@ A toolkit for batch processing of astronomical FITS images.
 | **crop.py** | Crop FITS images (by size/center or margins) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
-| **mtf.py** | Midtone Transfer Function |
+| **lrgb.py** | LRGB composition (combine luminance with RGB color) |
+| **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
+| **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
 | **rgb.py** | Merge/split RGB channels (3 mono ↔ 1 RGB FITS) |
@@ -53,6 +55,7 @@ A toolkit for batch processing of astronomical FITS images.
 
 - **Single file**: `image.fit`
 - **Numbered sequence**: `light0001.fit` → automatically discovers light0002.fit, light0003.fit, ...
+- **Force single file**: `=image.fit` — the `=` prefix bypasses sequence detection
 - **Wildcard mask**: `*.fit`, `light_*.fit`
 - **List file**: `@list.txt` or `list.txt` (one path per line)
 
@@ -542,30 +545,26 @@ noffset light0001.fit out0001.fit 10000
 
 ### autoflat.py
 
-**Purpose**: Flat field gradient correction (polynomial background fitting).
+**Purpose**: Background field flattening with two estimation modes.
 
-**Algorithm**:
-1. Zero pixel mask expansion
-2. Median filtering
-3. Min-binning for background extraction
-4. Polynomial surface fitting
-5. Correction: `result = input - model + offset`
+**Mode 1** (default): Cell-based — divides image into cells, sigma-clipped median per cell, median filters, polynomial fit. Handles zero borders and central object masking.
+
+**Mode 2**: Min-binning — zero expansion, median filter, iterative min-pooling, polynomial fit.
 
 **Syntax**:
 ```
-autoflat.py [-d] input_spec output_spec [poly_order]
+autoflat.py [-d] [--mode {1,2}] input_spec [output_spec] [options]
 ```
 
-**Parameters**:
-- `-d` — debug mode (saves intermediate images)
-- `input_spec` — input files
-- `output_spec` — output files
-- `poly_order` — polynomial order (default 1: plane)
+**Output**: `--save FILE` (background model), `--subtract` (subtract model, default).
+
+**Mode 1 options**: `--cell N` (64), `--clip K` (1.7), `--poly N` (3), `--mask-center [D]`.
 
 **Examples**:
 ```bash
-autoflat flat0001.fit corrected0001.fit
-autoflat -d flat.fit debug_flat.fit 2
+autoflat input.fit output.fit
+autoflat input.fit output.fit --poly 4 --mask-center
+autoflat --mode 2 input.fit output.fit
 ```
 
 ---
@@ -858,28 +857,38 @@ solve-field --help
 
 ### fits2tiff.py
 
-**Purpose**: Convert FITS images to TIFF format.
+**Purpose**: Convert FITS images to TIFF, JPEG, or PNG.
 
 **Features**:
+- Output format determined by file extension (`.tif`, `.jpg`, `.png`) or `--format` flag
 - Selectable bit depth: 8-bit (stretch), 16-bit (clamp), 32-bit float (normalized to [0,1])
 - Auto bit depth detection from FITS data type
 - Wildcard output pattern: `*.tif` preserves input filenames
 - 32-bit float normalized to [0.0, 1.0] for Photoshop compatibility
+- `--stretch` — auto screen transfer (MTF-like nonlinear stretch)
+- `--keepcolor` — preserve color during stretch (stretches luminance, scales RGB)
+- `--bin 2|4` — downscale by 2x or 4x before saving
+- `--jpeg Q` — JPEG quality (1-100, default 95)
 
 **Dependencies**: Pillow (`pip install Pillow`)
 
 **Syntax**:
 ```
-fits2tiff.py [--bits 8|16|32] [--flip] input_spec output_spec
+fits2tiff.py [--bits 8|16|32] [--format tiff|jpeg|png] [--stretch] [--keepcolor] [--bin 2|4] [--jpeg Q] [--flip] input_spec output_spec
 ```
 
 **Parameters**:
 - `input_spec` — input files (standard formats: file, mask, sequence, @list)
-- `output_spec` — output `.tif`/`.tiff` file, numbered pattern (`out0001.tif`), or wildcard (`*.tif`)
+- `output_spec` — output `.tif`/`.jpg`/`.png` file, numbered pattern, or wildcard
 - `--bits 8` — linear stretch [min,max] → [0,255], uint8
 - `--bits 16` — clamp to [0,65535], uint16
 - `--bits 32` — normalize [min,max] → [0.0,1.0], float32
 - (no --bits) — auto: int8/uint8→8, int16/uint16→16, everything else→32
+- `--format F` — output format: tiff, jpeg, png (default: by extension)
+- `--stretch` — nonlinear auto stretch for screen display
+- `--keepcolor` — preserve color during stretch
+- `--bin 2|4` — downscale by 2x or 4x
+- `--jpeg Q` — JPEG quality (1-100)
 - `--flip` — vertical flip (FITS bottom-left → TIFF top-left)
 
 **Examples**:
@@ -892,6 +901,9 @@ fits2tiff *.fit *.tif
 
 # 8-bit for previews
 fits2tiff --bits 8 light0001.fit preview0001.tif
+
+# JPEG with auto stretch for previews
+fits2tiff --stretch --bin 2 *.fit *.jpg
 
 # Numbered output
 fits2tiff --bits 16 *.fit out0001.tif
@@ -1418,35 +1430,27 @@ hotfix img0001.fit out0001.fit --sigma 4 --cold
 
 ### mtf.py
 
-**Purpose**: Midtone Transfer Function (as in PixInsight PixelMath).
+**Purpose**: Nonlinear brightness stretch with auto levels and color preservation.
 
-Applies a nonlinear tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
-
-The curve passes through (0,0), (m, 0.5), (1,1) where m is the midtones balance.
-Pixel values are normalized to [0,1] using dtype's full range (uint16: 0..65535).
-Supports 2D and 3D FITS images.
+Applies tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
 
 **Syntax**:
 ```
-mtf input_spec output_spec K [options]
+mtf input_spec output_spec K [K2 K3 ...] [options]
 ```
 
 **Parameters**:
-- `K` — midtones balance (0..1). K<0.5 brightens, K=0.5 identity, K>0.5 darkens
-- `--preserve_color` — color images: MTF on per-pixel average, scale R/G/B proportionally
-- `--k2 K2` — second MTF parameter for dual-MTF blending
-- `--blend B` — blend factor (0.0 = only K, 1.0 = only K2, default 0.5)
+- `K [K2 ...]` — midtones balance values (0..1). Multiple K: result = average of all MTFs. Duplicates act as weights.
+- `--auto` — auto black/white level detection (linked for color images)
+- `--keepcolor [K]` — preserve color via luminance ratio scaling
+- `--keepcolor-hsl [K]` — preserve color via HSL (better for aggressive stretch)
+- `--equal` — equal-weight luminance (R+G+B)/3 instead of (R+2G+B)/4
 
 **Examples**:
 ```bash
-# Brighten midtones
-mtf img0001.fit out0001.fit 0.2
-
-# Color-preserving stretch
-mtf img0001.fit out0001.fit 0.25 --preserve_color
-
-# Dual MTF blending
-mtf img.fit out.fit 0.15 --k2 0.45 --blend 0.3
+mtf img.fit out.fit 0.2
+mtf img.fit out.fit 0.1 0.1 0.4 --auto
+mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
 ```
 
 ---
@@ -1496,6 +1500,51 @@ rgbbalance img0001.fit out0001.fit
 # Star-based white balance
 rgbbalance img.fit out.fit --autostar
 rgbbalance img0001.fit out0001.fit --autostar ref.fit --snr 50
+```
+
+---
+
+### stack.py
+
+**Purpose**: Optimal weighted stacking with smooth outlier rejection.
+
+Multi-pass pipeline: analyze frames (SNR, FWHM) → weighted average → iterative sigma-clip with fade. Frames with better signal-to-noise contribute more to the result.
+
+**Syntax**:
+```
+stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]
+```
+
+**Examples**:
+```bash
+stack *.fit result.fit --sigma
+stack *.fit result.fit --sigma --fwhm
+stack *.fit result.fit --sigma --debug log.txt
+```
+
+---
+
+### lrgb.py
+
+**Purpose**: Combine luminance channel with RGB color data.
+
+Replaces the brightness information in a color image with a higher-quality luminance, preserving color.
+
+**Syntax**:
+```
+lrgb.py L.fit R.fit G.fit B.fit output.fit [--method hsl|ratio] [--saturation S]
+lrgb.py L.fit RGB.fit output.fit [options]
+```
+
+**Parameters**:
+- `--auto` — full pipeline: RGB balance + background flatten + LRGB combine
+- `--mask-center` — use central region for background estimation (with `--auto`)
+
+**Examples**:
+```bash
+lrgb L.fit R.fit G.fit B.fit result.fit
+lrgb L.fit RGB.fit result.fit --method ratio --saturation 1.3
+lrgb --auto L.fit R.fit G.fit B.fit result.fit
 ```
 
 ---

@@ -35,6 +35,8 @@ The `lib/batch_utils.py` module provides unified input/output handling that all 
 
 5. **Single file**: `image.fit`
 
+6. **Force single file**: `=image.fit` — the `=` prefix bypasses sequence detection (useful when a file has a numbered name but should not expand into a sequence)
+
 **Output patterns:**
 - Single file: `output.fit`
 - Numbered pattern: `output0001.fit` (auto-increments)
@@ -70,13 +72,13 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | normalize.py | Linear regression normalization between frames |
 | ngain.py | Normalize by gain (multiply to target median) |
 | noffset.py | Normalize by offset (add to target median) |
-| autoflat.py | Generate flat fields via polynomial fitting |
+| autoflat.py | Background field flattening (cell-based and min-binning modes) |
 | autosolve.py | WCS solving and astrometric rectification (WSL-aware) |
 | cosme.py | Hot pixel correction |
 | makedark.py | Meta-script: create master darks + cosme lists |
 | makeflat.py | Meta-script: create master flats per filter |
 | sortfits.py | Organize FITS by metadata |
-| fits2tiff.py | FITS to TIFF conversion (8/16/32-bit) |
+| fits2tiff.py | FITS to TIFF/JPEG/PNG conversion (8/16/32-bit, auto stretch) |
 | tiff2fits.py | TIFF to FITS conversion (with header recovery) |
 | fft_align.py | FFT-based image alignment |
 | raw2fits.py | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
@@ -85,8 +87,10 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | crop.py | Crop FITS images (by size/center or margins) |
 | debayer.py | Demosaic Bayer-pattern FITS to RGB |
 | hotfix.py | Remove single hot (and cold) pixels |
+| lrgb.py | LRGB luminance layering (HSL and ratio methods) |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
 | rgbbalance.py | RGB color balance and brightness normalization |
+| stack.py | Optimal weighted stacking with sigma-fade clipping |
 | staralign.py | Star-based image registration (pentagon descriptors, TPS) |
 
 ## Dependencies
@@ -262,6 +266,11 @@ result = dividend / safe_divisor
 result = np.nan_to_num(result, nan=0.0)  # Replace NaN with 0
 ```
 
+### Threading Policy
+
+**Use `ThreadPoolExecutor` for parallelism, NEVER `ProcessPoolExecutor`.**
+ProcessPoolExecutor multiplies memory usage per worker (each process loads its own copy of data). For astronomical images this is unacceptable — a 24-core machine stacking 6K×4K frames would need tens of GB just for worker copies. ThreadPoolExecutor shares memory; numpy releases GIL for large vectorized operations, enabling real parallelism without memory overhead.
+
 ### Batch File Wrapper Format
 
 Create `Commands/scriptname.bat`:
@@ -293,6 +302,19 @@ python "%SCRIPTTMP%" %*
 - `map_coordinates` releases GIL, enabling real thread parallelism for resampling
 - Auto-retry [1, 2, 2.5, 3]×base handles cross-filter star population differences
 - Tools importing star_* modules: staralign.py, bestof.py, rgbbalance.py (--autostar), sub.py (--continuum)
+
+### Background Library Module
+
+`lib/background.py` provides background estimation for use by multiple scripts:
+
+| Function | Purpose |
+|----------|---------|
+| `estimate_background()` | Estimate and render background model (cell grid + polynomial) |
+| `estimate_background_poly()` | Return polynomial coefficients for deferred rendering |
+| `render_background()` | Render background from cached coefficients |
+| `sigma_clipped_median()` | Iterative sigma-clipped median (ignores zeros) |
+
+**Used by**: autoflat.py (mode 1), stack.py (per-frame background for sigma comparison), mtf.py (autoblack detection)
 
 ### Other Guidelines
 
