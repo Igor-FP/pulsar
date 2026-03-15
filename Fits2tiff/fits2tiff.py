@@ -59,8 +59,9 @@ def usage():
         "Auto stretch (screen transfer function):\n"
         "  --stretch [T]  Auto black/white + MTF to place median at T\n"
         "                 (default T=0.1). Forces 8-bit output.\n"
-        "  --keepcolor [K]  Preserve color during stretch (default K=1.0).\n"
-        "                 K=1: full preservation via HSL. K=0: per-channel.\n"
+        "  --keepcolor [K]  Preserve color during stretch via luminance ratio\n"
+        "                 (default K=1.0). K=1: full, K=0: per-channel.\n"
+        "  --keepcolor-hsl [K]  Preserve color via HSL (apply MTF to L only).\n"
         "\n"
         "Downscale:\n"
         "  --bin N        Bin NxN pixels by averaging (2 or 4)\n"
@@ -89,8 +90,9 @@ def parse_args(argv):
     flip = False
     fmt = None
     stretch_target = None  # None = disabled
-    keepcolor_k = None
-    bin_factor = None      # None = no binning
+    keepcolor_k = None      # ratio mode
+    keepcolor_hsl_k = None  # HSL mode
+    bin_factor = None       # None = no binning
     jpeg_quality = 99
 
     positional = []
@@ -127,6 +129,15 @@ def parse_args(argv):
                     i += 1
                 except ValueError:
                     pass
+        elif a == '--keepcolor-hsl':
+            keepcolor_hsl_k = 1.0
+            i += 1
+            if i < len(args) and not args[i].startswith('-'):
+                try:
+                    keepcolor_hsl_k = float(args[i])
+                    i += 1
+                except ValueError:
+                    pass
         elif a == '--keepcolor':
             keepcolor_k = 1.0  # default
             i += 1
@@ -146,16 +157,14 @@ def parse_args(argv):
             bin_factor = int(args[i+1])
             i += 2
         elif a == '--jpeg':
-            if i + 1 >= len(args):
-                sys.stderr.write("Error: --jpeg requires a quality value (1-100).\n")
-                sys.exit(1)
-            try:
-                jpeg_quality = int(args[i+1])
-            except ValueError:
-                sys.stderr.write("Error: --jpeg quality must be an integer.\n")
-                sys.exit(1)
-            jpeg_quality = max(1, min(100, jpeg_quality))
-            i += 2
+            jpeg_quality = 99  # default if no number
+            i += 1
+            if i < len(args) and not args[i].startswith('-'):
+                try:
+                    jpeg_quality = max(1, min(100, int(args[i])))
+                    i += 1
+                except ValueError:
+                    pass
         elif a.startswith('-'):
             sys.stderr.write(f"Error: unknown option '{a}'\n")
             usage()
@@ -166,6 +175,16 @@ def parse_args(argv):
     if len(positional) != 2:
         usage()
 
+    # --jpeg without --format implies jpeg format
+    if fmt is None and jpeg_quality != 99:
+        fmt = 'jpeg'
+
+    # Auto-add extension if output has none and format is known
+    outfile = positional[1]
+    if fmt and not os.path.splitext(outfile)[1]:
+        ext_map = {'jpeg': '.jpg', 'png': '.png', 'tiff': '.tif'}
+        positional[1] = outfile + ext_map.get(fmt, '.tif')
+
     return {
         'input_spec': positional[0],
         'output_spec': positional[1],
@@ -174,6 +193,7 @@ def parse_args(argv):
         'format': fmt,
         'stretch_target': stretch_target,
         'keepcolor_k': keepcolor_k,
+        'keepcolor_hsl_k': keepcolor_hsl_k,
         'bin_factor': bin_factor,
         'jpeg_quality': jpeg_quality,
     }
@@ -368,14 +388,13 @@ def _hsl_to_rgb_pixel(h, s, l):
     return np.clip(r + m, 0, 1), np.clip(g + m, 0, 1), np.clip(b + m, 0, 1)
 
 
-def auto_stretch(data, target, keepcolor_k):
+def auto_stretch(data, target, keepcolor_k, keepcolor_hsl_k=None):
     """Apply auto screen transfer function.
 
-    1. Compute black/white (linked for RGB)
-    2. Remap to [0,1]
-    3. Find MTF K to place median at target
-    4. Apply MTF (with optional color preservation)
-    5. Scale to [0, 255] uint8
+    Color preservation modes (for RGB):
+      keepcolor_k:     ratio method (scale R,G,B by L_new/L_old)
+      keepcolor_hsl_k: HSL method (apply MTF to L only, preserve H,S)
+      neither:         per-channel MTF
 
     data: 2D (H,W) or 3D (3,H,W) float64 array.
     Returns: uint8 array (H,W) or (H,W,3).
@@ -411,23 +430,42 @@ def auto_stretch(data, target, keepcolor_k):
         # Find MTF K
         k = _find_mtf_k(median_norm, target)
 
-        if keepcolor_k is not None and keepcolor_k > 0:
+        if keepcolor_hsl_k is not None and keepcolor_hsl_k > 0:
             # HSL color preservation
             h, s, l = _rgb_to_hsl_pixel(channels[0], channels[1], channels[2])
             l_new = _apply_mtf(l, k)
 
-            if keepcolor_k >= 1.0:
+            if keepcolor_hsl_k >= 1.0:
                 r_out, g_out, b_out = _hsl_to_rgb_pixel(h, s, l_new)
             else:
-                # Blend: per-channel vs HSL
                 r_hsl, g_hsl, b_hsl = _hsl_to_rgb_pixel(h, s, l_new)
                 r_pc = _apply_mtf(channels[0], k)
                 g_pc = _apply_mtf(channels[1], k)
                 b_pc = _apply_mtf(channels[2], k)
-                kk = keepcolor_k
+                kk = keepcolor_hsl_k
                 r_out = r_pc * (1 - kk) + r_hsl * kk
                 g_out = g_pc * (1 - kk) + g_hsl * kk
                 b_out = b_pc * (1 - kk) + b_hsl * kk
+
+        elif keepcolor_k is not None and keepcolor_k > 0:
+            # Ratio color preservation: scale by L_new/L_old
+            lum_new = _apply_mtf(lum, k)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                scale = np.where(lum > 0, lum_new / lum, 0.0)
+            r_ratio = np.clip(channels[0] * scale, 0, 1)
+            g_ratio = np.clip(channels[1] * scale, 0, 1)
+            b_ratio = np.clip(channels[2] * scale, 0, 1)
+
+            if keepcolor_k >= 1.0:
+                r_out, g_out, b_out = r_ratio, g_ratio, b_ratio
+            else:
+                r_pc = _apply_mtf(channels[0], k)
+                g_pc = _apply_mtf(channels[1], k)
+                b_pc = _apply_mtf(channels[2], k)
+                kk = keepcolor_k
+                r_out = r_pc * (1 - kk) + r_ratio * kk
+                g_out = g_pc * (1 - kk) + g_ratio * kk
+                b_out = b_pc * (1 - kk) + b_ratio * kk
         else:
             # Per-channel MTF
             r_out = _apply_mtf(channels[0], k)
@@ -628,6 +666,7 @@ def convert_file(infile, outfile, config):
     flip = config['flip']
     stretch_target = config['stretch_target']
     keepcolor_k = config['keepcolor_k']
+    keepcolor_hsl_k = config['keepcolor_hsl_k']
     bin_factor = config['bin_factor']
     jpeg_quality = config['jpeg_quality']
 
@@ -658,7 +697,7 @@ def convert_file(infile, outfile, config):
     if stretch_target is not None:
         work = data.astype(np.float64)
         work = np.nan_to_num(work, nan=0.0, posinf=0.0, neginf=0.0)
-        result = auto_stretch(work, stretch_target, keepcolor_k)
+        result = auto_stretch(work, stretch_target, keepcolor_k, keepcolor_hsl_k)
         img = Image.fromarray(result)
         _save_image(img, outfile, out_fmt, jpeg_quality)
         return
