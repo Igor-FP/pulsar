@@ -44,6 +44,13 @@
             </div>
 
             <div class="nav-section">
+                <div class="nav-section-title">Стекинг</div>
+                <ul>
+                    <li><a href="#stack">stack.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
                 <div class="nav-section-title">Калибровка</div>
                 <ul>
                     <li><a href="#calibrate">calibrate.py</a></li>
@@ -76,6 +83,17 @@
                     <li><a href="#cosme">cosme.py</a></li>
                     <li><a href="#make_cosme">make_cosme.py</a></li>
                     <li><a href="#autoflat">autoflat.py</a></li>
+                    <li><a href="#hotfix">hotfix.py</a></li>
+                </ul>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-section-title">Обработка</div>
+                <ul>
+                    <li><a href="#mtf">mtf.py</a></li>
+                    <li><a href="#lrgb">lrgb.py</a></li>
+                    <li><a href="#rgbbalance">rgbbalance.py</a></li>
+                    <li><a href="#rgb">rgb.py</a></li>
                 </ul>
             </div>
 
@@ -84,6 +102,7 @@
                 <ul>
                     <li><a href="#autosolve">autosolve.py</a></li>
                     <li><a href="#fft_align">fft_align.py</a></li>
+                    <li><a href="#staralign">staralign.py</a></li>
                     <li><a href="#sortfits">sortfits.py</a></li>
                 </ul>
             </div>
@@ -128,6 +147,21 @@
                         <tr><td>sortfits.py</td><td>Сортировка FITS по времени</td></tr>
                         <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS)</td></tr>
                         <tr><td>fft_align.py</td><td>FFT-выравнивание кадров</td></tr>
+                        <tr><td>stack.py</td><td>Оптимальное взвешенное сложение с sigma-fade</td></tr>
+                        <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
+                        <tr><td>mtf.py</td><td>Midtone Transfer Function с auto black/white</td></tr>
+                        <tr><td>rgbbalance.py</td><td>Баланс цвета и яркости RGB</td></tr>
+                        <tr><td>rgb.py</td><td>Сборка/разделение RGB каналов</td></tr>
+                        <tr><td>hotfix.py</td><td>Удаление горячих и холодных пикселей</td></tr>
+                        <tr><td>staralign.py</td><td>Выравнивание по звёздам (TPS)</td></tr>
+                        <tr><td>bestof.py</td><td>Отбор лучших кадров по FWHM/SNR</td></tr>
+                        <tr><td>crop.py</td><td>Обрезка FITS-изображений</td></tr>
+                        <tr><td>binxy.py</td><td>Программный биннинг 2×2 / 4×4</td></tr>
+                        <tr><td>debayer.py</td><td>Демозаика Bayer → RGB</td></tr>
+                        <tr><td>raw2fits.py</td><td>Camera RAW → FITS конверсия</td></tr>
+                        <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия</td></tr>
+                        <tr><td>tiff2fits.py</td><td>TIFF → FITS с восстановлением заголовка</td></tr>
+                        <tr><td>absession.py</td><td>CSV генератор для AstroBin</td></tr>
                     </tbody>
                 </table>
             </section>
@@ -347,6 +381,34 @@ sum *.fit combined.fit</code></pre>
                     <pre><code>med dark0001.fit master_dark.fit
 med flat*.fit master_flat.fit --tile 1024
 med @list.txt median.fit --tile 0</code></pre>
+                </div>
+            </section>
+
+            <!-- Stacking -->
+            <section id="stack">
+                <div class="script-card">
+                    <h3>stack.py <span class="badge">стекинг</span></h3>
+                    <p>Оптимальное взвешенное сложение с sigma-fade отсечением. Многопроходный алгоритм с итеративным уточнением.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Веса по SNR² и/или FWHM (MTF-ранжирование)</li>
+                        <li>Sigma-fade: плавное подавление выбросов вместо жёсткого отсечения</li>
+                        <li>Автоматическое выравнивание фона для точного сравнения кадров</li>
+                        <li>Нормализация яркости между кадрами</li>
+                        <li>Адаптивная многопоточность с контролем памяти</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>stack *.fit result.fit --sigma
+stack *.fit result.fit --sigma 2.5 --fade 0.5 --iter 3
+stack *.fit result.fit --sigma --fwhm 0.3
+stack *.fit result.fit --fwhm --nosnr</code></pre>
                 </div>
             </section>
 
@@ -693,9 +755,16 @@ cosme image.fit mask.fit cosme.lst -t</code></pre>
             <section id="autoflat">
                 <div class="script-card">
                     <h3>autoflat.py <span class="badge">коррекция</span></h3>
-                    <p>Выравнивание градиента на flat-кадрах методом полиномиальной коррекции фона.</p>
+                    <p>Выравнивание градиента на flat-кадрах методом полиномиальной коррекции фона. Два режима работы.</p>
 
-                    <h4>Алгоритм</h4>
+                    <h4>Mode 1: Cell-based (по умолчанию)</h4>
+                    <ol>
+                        <li>Разбиение на ячейки, медиана каждой ячейки</li>
+                        <li>Полиномиальная аппроксимация поверхности</li>
+                        <li>Коррекция: result = input - model + offset</li>
+                    </ol>
+
+                    <h4>Mode 2: Min-binning (--minbin)</h4>
                     <ol>
                         <li>Расширение маски нулевых пикселей</li>
                         <li>Медианная фильтрация</li>
@@ -706,18 +775,20 @@ cosme image.fit mask.fit cosme.lst -t</code></pre>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>autoflat.py [-d] input_spec output_spec [poly_order]</code>
+                        <code>autoflat.py [-d] [--minbin] input_spec output_spec [poly_order]</code>
                     </div>
 
                     <div class="params">
                         <h4>Параметры</h4>
                         <div class="param"><span class="param-name">-d</span><span class="param-desc">debug режим (сохраняет промежуточные изображения)</span></div>
+                        <div class="param"><span class="param-name">--minbin</span><span class="param-desc">Mode 2: min-binning вместо cell-based</span></div>
                         <div class="param"><span class="param-name">poly_order</span><span class="param-desc">порядок полинома (по умолчанию 1: плоскость)</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>autoflat flat0001.fit corrected0001.fit
-autoflat -d flat.fit debug_flat.fit 2</code></pre>
+autoflat -d flat.fit debug_flat.fit 2
+autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                 </div>
             </section>
 
@@ -810,6 +881,59 @@ fft_align ref.fit light0001.fit aligned0001.fit --flux --max-angle 2</code></pre
                     <h4>Примеры</h4>
                     <pre><code>sortfits light0001.fit sorted0001.fit
 sortfits *.fit session.fit --sessions --gap-hours 2</code></pre>
+                </div>
+            </section>
+
+            <!-- Processing -->
+            <section id="mtf">
+                <div class="script-card">
+                    <h3>mtf.py <span class="badge">обработка</span></h3>
+                    <p>Midtone Transfer Function (PixInsight-совместимая). Нелинейная тональная кривая.</p>
+
+                    <h4>Особенности</h4>
+                    <ul>
+                        <li>Несколько значений K для мульти-MTF усреднения</li>
+                        <li>Auto black/white по фону и ярким звёздам</li>
+                        <li>Сохранение цвета: ratio и HSL методы</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>mtf.py input output K [K2 K3 ...] [--auto] [--keepcolor [K]] [--keepcolor-hsl [K]]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>mtf img.fit out.fit 0.2
+mtf img.fit out.fit 0.1 0.1 0.4 --auto
+mtf img.fit out.fit 0.01 --keepcolor-hsl --auto</code></pre>
+                </div>
+            </section>
+
+            <section id="lrgb">
+                <div class="script-card">
+                    <h3>lrgb.py <span class="badge">обработка</span></h3>
+                    <p>LRGB композиция — совмещение высокодетального L-канала с цветовыми данными RGB.</p>
+
+                    <h4>Методы</h4>
+                    <ul>
+                        <li><strong>hsl</strong> (по умолчанию): RGB→HSL, замена L, HSL→RGB</li>
+                        <li><strong>ratio</strong>: масштабирование R,G,B по L_new/L_old</li>
+                    </ul>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>lrgb.py L.fit R.fit G.fit B.fit output.fit [--method hsl|ratio] [--saturation S] [--lightness K]</code>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <h4>Автоматический пайплайн</h4>
+                    <p><code>--auto</code> — полный пайплайн: баланс RGB + выравнивание фона + LRGB-совмещение.<br>
+                    <code>--mask-center</code> — центральная область для оценки фона.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>lrgb L.fit R.fit G.fit B.fit result.fit
+lrgb L.fit RGB.fit result.fit --method ratio --saturation 1.3
+lrgb --auto L.fit R.fit G.fit B.fit result.fit</code></pre>
                 </div>
             </section>
 
