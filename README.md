@@ -14,29 +14,32 @@
 
 ---
 
-## Vision and Goals
+## About
 
-**PULSAR** is a suite of command-line tools for complete automation of amateur astrophotography processing — from raw frame calibration to final results.
+**PULSAR** is a general-purpose software system for reduction and processing of astronomical CCD/CMOS imaging data. Each tool performs a single well-defined operation on FITS images; tools compose into automated pipelines covering the full workflow from raw frames to calibrated, combined, and enhanced results.
 
-### Inspiration
+The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.htm)** by Christian Buil. PULSAR brings that philosophy to the modern command line: each tool does one thing well, tools compose into pipelines, and everything is scriptable.
 
-This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.htm)** by Christian Buil — a legendary astronomical image processing software. PULSAR brings the IRIS philosophy to the modern command line, enabling full automation through scripts and pipelines.
+### Key Capabilities
 
-### Project Goals
+- **Star-based alignment** — robust geometric matching using pentagon descriptors with RANSAC outlier rejection and Thin Plate Spline refinement. Handles rotation, scale, and optical distortion. Works across filters and varying star populations.
 
-- **Full automation** — from RAW to final result with zero manual intervention
-- **Calibration** — automatic dark/flat selection based on metadata (EXPTIME, FILTER, date)
-- **Stacking** — summation and median combining with alignment
-- **Astrometry** — automatic WCS solving and reprojection to a common coordinate grid
-- **Object detection** — comet and asteroid identification, nova patrol (in development)
-- **Mosaics and surveys** — panorama stitching and sky surveys (in development)
+- **Optimal stacking** — weighted combination where each frame contributes according to its measured SNR and FWHM. Outlier rejection uses smooth sigma-fade instead of hard clipping, preserving faint signal near bright objects. Iterative refinement with background-compensated deviation maps.
+
+- **Background estimation** — polynomial surface fitted to a sigma-clipped cell grid with median filtering and border extension. Accurately models sky gradients, vignetting, and light pollution while ignoring stars and extended objects. Central object masking for galaxies and nebulae.
+
+- **Nonlinear stretch and color processing** — Midtone Transfer Function with automatic black/white level detection, multi-curve blending, and color preservation through HSL or luminance-ratio methods. LRGB composition with automatic RGB balancing by star photometry.
+
+- **Calibration pipeline** — automatic dark/flat matching by exposure time, filter, and date. Optimized dark coefficient fitting. Hot pixel detection and correction. Master frame creation from raw calibration data. Observatory automation: best-flat selection by trial application quality, equipment maintenance interval tracking for master flats validation & selection.
+
+- **Astrometric solving** — WCS coordinate solutions via astrometry.net, reprojection to tangent plane, subpixel alignment. Works on Windows through WSL.
 
 ### Why Command Line?
 
-- **Automation**: easily integrates into scripts and pipelines
-- **Reproducibility**: one command — one result, always
-- **Scalability**: process thousands of frames with a single command
-- **Integration**: works with any scheduler, CI/CD, remote access
+- **Automation** — scriptable pipelines from raw to final result, no GUI interaction needed
+- **Reproducibility** — same command, same result, always
+- **Scalability** — process hundreds of frames in batch with parallel execution
+- **Integration** — works with schedulers, remote access, and any workflow
 
 ---
 
@@ -48,44 +51,38 @@ This project is ideologically inspired by **[IRIS](http://www.astrosurf.com/buil
 - Hot pixel cosmetic correction (from coordinate list or sigma-based detection)
 - Automatic master dark and master flat creation
 
-### Arithmetic
-- Add, subtract, multiply, divide images
-- Numeric constants supported as operands
-- Works with all data types (int8-64, float32-64)
+### Alignment
+- Star-based registration with geometric descriptor matching, RANSAC, and TPS
+- WCS astrometric solving and tangent-plane reprojection
+- FFT-based alignment with rotation and scale search
+- Chromatic aberration correction (R/B channel alignment to G)
 
 ### Stacking
-- Summation with exposure time tracking
-- Median combining (parallel tiled processing)
-- Optimal weighted stacking with sigma-fade clipping (SNR² and FWHM-based weights)
-- Brightness normalization between frames (gain, offset, regression)
-
-### Astrometry and Alignment
-- WCS solving via astrometry.net (WSL on Windows)
-- Reprojection to tangent plane (TAN/gnomonic projection)
-- Star-based registration with pentagon descriptors, RANSAC and TPS refinement
-- FFT alignment with subpixel accuracy
-- Rotation and scale correction
-- Chromatic aberration correction (R/B channel alignment to G)
-- Crop with autocenter or manual positions from CSV
+- Optimal weighted stacking with SNR and FWHM-based weights
+- Smooth outlier rejection (sigma-fade) with iterative deviation refinement
+- Simple summation and median combining
+- Brightness normalization between frames
 
 ### Image Processing
-- Midtone Transfer Function — PixInsight-compatible nonlinear stretch with auto black/white level detection and multi-K support
-- Background field flattening with cell-based estimation and polynomial fitting
-- LRGB composition (HSL and ratio methods)
-- Auto black/white level detection for screen transfer
-- RGB color balance and brightness normalization
-- Bayer demosaicing (bilinear and VNG methods)
-- Software pixel binning (2×2, 4×4)
+- Nonlinear stretch (MTF) with auto black/white levels and multi-curve blending
+- Background field flattening with polynomial fitting
+- LRGB composition with automatic RGB balancing
+- Color preservation through HSL and luminance-ratio methods
+- RGB color balance by star photometry
+- Bayer demosaicing, pixel binning, cropping
 
 ### Conversion
-- Camera RAW to FITS with full EXIF mapping and Bayer CFA preservation (currently Canon CR2/CR3)
-- FITS to TIFF, JPEG, PNG (8/16/32-bit, mono and RGB, auto stretch) and TIFF back to FITS with header recovery
+- Camera RAW to FITS (Canon CR2/CR3) with EXIF mapping and Bayer CFA preservation
+- FITS to TIFF, JPEG, PNG with auto stretch for screen preview
+- TIFF to FITS with header recovery
 
 ### Utilities
-- Time-based sorting with session splitting
-- Hot pixel list generation
-- Flat field gradient correction
+- Frame sorting by time with session splitting
+- Best frame selection by FWHM
 - AstroBin acquisition session CSV generator
+
+- Mosaics and sky surveys (in development)
+- Object detection — comet/asteroid identification, nova patrol (in development)
 
 ---
 
@@ -372,3 +369,7 @@ MIT License
 - [Siril](https://siril.org/) — free astronomical image processing
 - [PixInsight](https://pixinsight.com/) — professional processing platform
 - [Astrometry.net](http://astrometry.net/) — astrometric solving service
+
+---
+
+PixInsight is a registered trademark of Pleiades Astrophoto S.L. This project is not affiliated with or endorsed by Pleiades Astrophoto.
