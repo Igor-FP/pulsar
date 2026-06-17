@@ -73,7 +73,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | ngain.py | Normalize by gain (multiply to target median) |
 | noffset.py | Normalize by offset (add to target median) |
 | autoflat.py | Background field flattening (cell-based and min-binning modes) |
-| autosolve.py | WCS solving and astrometric rectification (WSL-aware) |
+| autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support) |
 | cosme.py | Hot pixel correction |
 | makedark.py | Meta-script: create master darks + cosme lists |
 | makeflat.py | Meta-script: create master flats per filter |

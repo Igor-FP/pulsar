@@ -787,6 +787,7 @@ sortfits *.fit sorted/ --auto --group-num
 - Reprojection to gnomonic (TAN) projection
 - Subpixel alignment via FFT
 - WCS refit from .corr files
+- Supports RGB FITS input — solves on green channel, reprojects all three channels
 
 **Syntax**:
 ```
@@ -803,6 +804,7 @@ autosolve.py [options] input_spec output_spec
 - `--ref file.fit` — reference frame for alignment
 - `--scale-low`, `--scale-high` — scale range (arcsec/pixel)
 - `--radius` — search radius (degrees)
+- `--no-rotate` — rectify without derotation — corrects distortion while preserving field rotation. No size change, no black borders. For mosaics and surveys.
 
 **Reprojection (--rectify)**:
 Transforms image to gnomonic (TAN) projection — projection onto a plane tangent to the celestial sphere. By default center is taken from first file; can be set explicitly via `--rect-center-ra` and `--rect-center-dec`.
@@ -890,6 +892,8 @@ fits2tiff.py [--bits 8|16|32] [--format tiff|jpeg|png] [--stretch] [--keepcolor]
 - `--bin 2|4` — downscale by 2x or 4x
 - `--jpeg Q` — JPEG quality (1-100)
 - `--flip` — vertical flip (FITS bottom-left → TIFF top-left)
+
+JPEG and PNG output automatically embeds the full FITS header as metadata (WCS coordinates, object name, exposure, etc.)
 
 **Examples**:
 ```bash

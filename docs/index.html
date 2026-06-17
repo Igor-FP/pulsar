@@ -145,7 +145,7 @@
                         <tr><td>newflat.py</td><td>Запись в лог обслуживания камеры</td></tr>
                         <tr><td>darkopt.py</td><td>Оптимизированное вычитание дарка</td></tr>
                         <tr><td>sortfits.py</td><td>Сортировка FITS по времени</td></tr>
-                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS)</td></tr>
+                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS, RGB)</td></tr>
                         <tr><td>fft_align.py</td><td>FFT-выравнивание кадров</td></tr>
                         <tr><td>stack.py</td><td>Оптимальное взвешенное сложение с sigma-fade</td></tr>
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
@@ -159,7 +159,7 @@
                         <tr><td>binxy.py</td><td>Программный биннинг 2×2 / 4×4</td></tr>
                         <tr><td>debayer.py</td><td>Демозаика Bayer → RGB</td></tr>
                         <tr><td>raw2fits.py</td><td>Camera RAW → FITS конверсия</td></tr>
-                        <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия</td></tr>
+                        <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия (JPEG/PNG сохраняют FITS-заголовок в метаданных)</td></tr>
                         <tr><td>tiff2fits.py</td><td>TIFF → FITS с восстановлением заголовка</td></tr>
                         <tr><td>absession.py</td><td>CSV генератор для AstroBin</td></tr>
                     </tbody>
@@ -798,7 +798,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
 
                 <div class="script-card">
                     <h3>autosolve.py <span class="badge">выравнивание</span></h3>
-                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL.</p>
+                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL. Поддерживает цветные RGB FITS (3,H,W) — решение по зелёному каналу, репроекция всех трёх каналов.</p>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
@@ -816,6 +816,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--ref file.fit</span><span class="param-desc">референсный кадр</span></div>
                         <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
+                        <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
                     </div>
 
                     <h4>Репроекция (--rectify)</h4>

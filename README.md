@@ -32,7 +32,7 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 
 - **Calibration pipeline** — automatic dark/flat matching by exposure time, filter, and date. Optimized dark coefficient fitting. Hot pixel detection and correction. Master frame creation from raw calibration data. Observatory automation: best-flat selection by trial application quality, equipment maintenance interval tracking for master flats validation & selection.
 
-- **Astrometric solving** — WCS coordinate solutions via astrometry.net, reprojection to tangent plane, subpixel alignment. Works on Windows through WSL.
+- **Astrometric solving** — WCS coordinate solutions via astrometry.net, reprojection to tangent plane, subpixel alignment. Distortion-only rectification without derotation for mosaics and surveys. Supports RGB FITS input. Works on Windows through WSL.
 
 ### Why Command Line?
 
@@ -73,7 +73,7 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 
 ### Conversion
 - Camera RAW to FITS (Canon CR2/CR3) with EXIF mapping and Bayer CFA preservation
-- FITS to TIFF, JPEG, PNG with auto stretch for screen preview
+- FITS to TIFF, JPEG, PNG with auto stretch for screen preview; JPEG/PNG preserve full FITS header as metadata
 - TIFF to FITS with header recovery
 
 ### Utilities
