@@ -611,13 +611,42 @@ def _load_file_strip(args):
         return idx, strip
 
 
+def _median_axis0(stack, ignore_zeros=False):
+    """Median along axis 0 of a (n, ...) float64 stack.
+
+    Default: exact median via np.partition (even n -> mean of the two middle
+    values). With ignore_zeros=True, pixels that are exactly 0 in a frame are
+    excluded from that position's median (NaN-median of the remaining frames);
+    a position that is 0 in EVERY frame yields 0. Mutates `stack` in place
+    (the caller discards it) to avoid a full extra copy.
+    """
+    import numpy as np
+    import warnings
+
+    if ignore_zeros:
+        stack[stack == 0] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            med = np.nanmedian(stack, axis=0)
+        return np.nan_to_num(med, nan=0.0)
+
+    n = stack.shape[0]
+    if n % 2 == 1:
+        k = n // 2
+        return np.partition(stack, k, axis=0)[k]
+    k1, k2 = n // 2 - 1, n // 2
+    part = np.partition(stack, [k1, k2], axis=0)
+    return (part[k1] + part[k2]) / 2.0
+
+
 def fast_median_combine(
     file_list: "List[str]",
     ref_shape: "Tuple[int, int]",
     ref_dtype: "np.dtype",
     max_memory_gb: float = 16.0,
     max_workers: int = None,
-    progress_callback=None
+    progress_callback=None,
+    ignore_zeros: bool = False
 ) -> "np.ndarray":
     """
     Fast median combine using parallel I/O and single-pass processing.
@@ -634,6 +663,8 @@ def fast_median_combine(
         max_memory_gb: Maximum memory to use for stack (default 4 GB)
         max_workers: Max threads for parallel loading (default: CPU count)
         progress_callback: Optional callback(current, total, message) for progress
+        ignore_zeros: If True, exclude exact-zero pixels from each position's
+            median (a position that is 0 in every frame yields 0)
 
     Returns:
         Median image as float64 numpy array
@@ -682,16 +713,9 @@ def fast_median_combine(
                 done += 1
                 report(done, n_files, "Loading")
 
-        # Compute median using partition
+        # Compute median
         report(0, 1, "Computing median")
-        if n_files % 2 == 1:
-            k = n_files // 2
-            median = np.partition(stack, k, axis=0)[k]
-        else:
-            k1, k2 = n_files // 2 - 1, n_files // 2
-            part = np.partition(stack, [k1, k2], axis=0)
-            median = (part[k1] + part[k2]) / 2.0
-
+        median = _median_axis0(stack, ignore_zeros)
         report(1, 1, "Median complete")
         return median
 
@@ -722,13 +746,7 @@ def fast_median_combine(
                 strip_stack[idx] = strip_data
 
         # Compute median for this strip
-        if n_files % 2 == 1:
-            k = n_files // 2
-            median[y0:y1, :] = np.partition(strip_stack, k, axis=0)[k]
-        else:
-            k1, k2 = n_files // 2 - 1, n_files // 2
-            part = np.partition(strip_stack, [k1, k2], axis=0)
-            median[y0:y1, :] = (part[k1] + part[k2]) / 2.0
+        median[y0:y1, :] = _median_axis0(strip_stack, ignore_zeros)
 
         report(strip_idx + 1, n_strips, f"Strip {strip_idx + 1}/{n_strips}")
 

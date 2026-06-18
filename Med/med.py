@@ -4,7 +4,7 @@
 med.py - Median combine FITS images.
 
 Usage:
-  med.py input_spec output.fits [--memory N]
+  med.py input_spec output.fits [--memory N] [--zero]
 
 input_spec:
   firstNNNN.fits   - numbered sequence
@@ -13,7 +13,10 @@ input_spec:
   mask*.fit        - wildcard mask
 
 Options:
-  --memory N       - max memory in GB for stack (default: 4.0)
+  --memory N       - max memory in GB for stack (default: 16.0)
+  --zero           - ignore zero pixels: a pixel == 0 in a frame is excluded
+                     from that position's median; the output pixel is 0 only
+                     where every frame is 0 at that position
 
 Uses parallel I/O with ThreadPoolExecutor for fast loading.
 """
@@ -57,6 +60,12 @@ def parse_args():
         type=int,
         default=None,
         help=argparse.SUPPRESS,  # Hidden, for backward compatibility
+    )
+    parser.add_argument(
+        "--zero",
+        action="store_true",
+        help="Ignore zero pixels: a pixel == 0 in a frame is excluded from\n"
+             "that position's median; output is 0 only where every frame is 0.",
     )
     return parser.parse_args()
 
@@ -143,6 +152,8 @@ def main():
 
     print(f"Image size: {width}x{height}, combining {n_files} files")
     print(f"Max memory: {max_memory:.1f} GB")
+    if args.zero:
+        print("Zero-ignoring mode: per-pixel median over non-zero frames")
 
     start_time = time.time()
 
@@ -151,7 +162,8 @@ def main():
         median = batch_utils.fast_median_combine(
             input_files, ref_shape, ref_dtype,
             max_memory_gb=max_memory,
-            progress_callback=print_progress
+            progress_callback=print_progress,
+            ignore_zeros=args.zero,
         )
     except Exception as e:
         print(f"\nError during median combine: {e}", file=sys.stderr)
@@ -171,7 +183,10 @@ def main():
 
     # Update header
     safe_add_history(ref_header, f"MEDIAN combine from {n_files} input file(s).")
-    safe_add_history(ref_header, "Exact pixel-wise median using np.partition.")
+    if args.zero:
+        safe_add_history(ref_header, "Zeros ignored (--zero): per-pixel median over non-zero frames; output 0 only where every frame is 0.")
+    else:
+        safe_add_history(ref_header, "Exact pixel-wise median using np.partition.")
     if is_int:
         safe_add_history(ref_header, "Integer: median = floor((v_low + v_high) / 2).")
 
