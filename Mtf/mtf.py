@@ -63,6 +63,7 @@ def usage():
         "Usage:\n"
         "  mtf.py input_spec output_spec K [options]\n"
         "  mtf.py input_spec output_spec --median T [options]\n"
+        "  mtf.py input_spec output_spec --inverse\n"
         "\n"
         "Positional arguments:\n"
         "  input_spec       Input file(s): single file, wildcard (*.fit),\n"
@@ -86,6 +87,12 @@ def usage():
         "                    zeros when computing the --median, and restore the\n"
         "                    input's zero pixels in the output so MTF never\n"
         "                    shifts a 0 to a non-zero value.\n"
+        "  --inverse         Numerically undo a previously applied MTF using the\n"
+        "                    MTF* keys this tool writes to the header, restoring\n"
+        "                    the linear data. Exact only for non-saturated pixels\n"
+        "                    (values clipped to 0/1 are lost). Errors if no record\n"
+        "                    is present or the transform was non-invertible\n"
+        "                    (multiple K, --clip, or a partial keepcolor blend).\n"
         "  --clip [P]        After MTF, clip black/white by percentile P\n"
         "                    (default P=0.001). Ignores pixels <= 0.\n"
         "                    Remaps [black_P, white_P] to [0, 1].\n"
@@ -112,6 +119,7 @@ def usage():
         "  mtf.py img.fit out.fit --median 0.25 --auto\n"
         "  mtf.py img.fit out.fit -m 0.2 --keepcolor --auto\n"
         "  mtf.py img.fit out.fit --median 0.25 --auto --zero\n"
+        "  mtf.py stretched.fit linear.fit --inverse\n"
         "  mtf.py img.fit out.fit 0.1 0.2 0.4\n"
         "  mtf.py img.fit out.fit 0.1 0.1 0.4         (weight K=0.1 x2)\n"
         "  mtf.py img.fit out.fit 0.15 --auto\n"
@@ -146,6 +154,7 @@ def parse_args(argv):
     autowhite = False
     median_target = None    # None = disabled; float in (0,1) = target-median mode
     zero_mode = False       # --zero: ignore zeros in stats, restore them on output
+    inverse = False         # --inverse: numerically undo a recorded MTF
 
     i = 0
     positional = []
@@ -189,6 +198,9 @@ def parse_args(argv):
         elif args[i] in ('--zero', '-z'):
             zero_mode = True
             i += 1
+        elif args[i] == '--inverse':
+            inverse = True
+            i += 1
         elif args[i] == '--auto':
             autoblack = True
             autowhite = True
@@ -216,7 +228,20 @@ def parse_args(argv):
             positional.append(args[i])
             i += 1
 
-    if median_target is not None:
+    if inverse:
+        # Inverse mode: the transform is read from the FITS header; no K / median.
+        if median_target is not None:
+            sys.stderr.write("Error: --inverse cannot be combined with --median.\n")
+            sys.exit(1)
+        if len(positional) != 2:
+            sys.stderr.write(
+                "Error: --inverse takes only input_spec and output_spec "
+                "(transform is read from the header).\n")
+            sys.exit(1)
+        input_spec = positional[0]
+        output_spec = positional[1]
+        ks = []
+    elif median_target is not None:
         # Target-median mode: K is computed per file, not given.
         if len(positional) < 2:
             usage()
@@ -245,6 +270,7 @@ def parse_args(argv):
         'ks': ks,
         'median_target': median_target,
         'zero': zero_mode,
+        'inverse': inverse,
         'clip': clip,
         'keepcolor_k': keepcolor_k,
         'keepcolor_hsl_k': keepcolor_hsl_k,
@@ -585,38 +611,35 @@ def apply_mtf_keepcolor_hsl(work_3d, ks, keepcolor_k):
 # Normalization helpers
 # ---------------------------------------------------------------------------
 
-_norm_scale = {'min': 0.0, 'max': 1.0}  # set by normalize_to_01, used by denormalize
-
-
 def normalize_to_01(data, orig_dtype):
-    """Normalize data to [0, 1] range.
+    """Normalize data to [0, 1]. Returns (work, nmin, nmax).
 
     Integer types: uses dtype range (0..65535 for uint16, etc).
     Float types: uses actual data range (0..max_value).
+
+    The (nmin, nmax) scale is returned (not stored globally) so it is
+    thread-safe and can be recorded in the header for --inverse.
     """
-    global _norm_scale
     work = data.astype(np.float64)
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
-        _norm_scale = {'min': float(info.min), 'max': float(info.max)}
-        work = (work - info.min) / float(info.max - info.min)
+        nmin, nmax = float(info.min), float(info.max)
+        work = (work - nmin) / (nmax - nmin)
     else:
         # Float: normalize by actual data range
         valid = work[work > 0] if np.any(work > 0) else work.ravel()
         vmax = float(np.max(valid)) if valid.size > 0 else 1.0
         if vmax <= 0:
             vmax = 1.0
-        _norm_scale = {'min': 0.0, 'max': vmax}
+        nmin, nmax = 0.0, vmax
         work = work / vmax
         np.clip(work, 0.0, 1.0, out=work)
-    return work
+    return work, nmin, nmax
 
 
-def denormalize_from_01(data, orig_dtype):
-    """Convert [0, 1] data back to original range."""
-    vmin = _norm_scale['min']
-    vmax = _norm_scale['max']
-    work = data * (vmax - vmin) + vmin
+def denormalize_from_01(data, orig_dtype, nmin, nmax):
+    """Convert [0, 1] data back to original range using the given scale."""
+    work = data * (nmax - nmin) + nmin
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
         work = np.clip(work, info.min, info.max)
@@ -629,6 +652,87 @@ def denormalize_from_01(data, orig_dtype):
             arr[bad] = 0
         return arr
     return work.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Transform record + inverse (for --inverse: restore linearity by the numbers)
+# ---------------------------------------------------------------------------
+
+_MTF_KEYS = ('MTFINV', 'MTFK', 'MTFBLK', 'MTFWHT',
+             'MTFNMIN', 'MTFNMAX', 'MTFLUM', 'MTFCOL')
+
+
+def _write_mtf_record(header, ks, black, white, nmin, nmax,
+                      lum_mode, color_mode, invertible):
+    """Record the applied MTF transform so it can be numerically inverted later.
+
+    Only single-K, unclipped, full-keepcolor transforms are invertible; otherwise
+    only MTFINV=False is written and --inverse will refuse the frame.
+    """
+    header['MTFINV'] = (bool(invertible), 'MTF invertible by mtf.py --inverse')
+    if invertible:
+        header['MTFK'] = (float(ks[0]), 'MTF midtones K applied')
+        header['MTFBLK'] = (float(black), 'pre-MTF black level in [0,1]')
+        header['MTFWHT'] = (float(white), 'pre-MTF white level in [0,1]')
+        header['MTFNMIN'] = (float(nmin), 'normalization min (data units)')
+        header['MTFNMAX'] = (float(nmax), 'normalization max (data units)')
+        header['MTFLUM'] = (lum_mode, 'luminance weighting: green or equal')
+        header['MTFCOL'] = (color_mode, 'color mode: none, ratio or hsl')
+
+
+def _mtf_inverse(data, header, orig_dtype):
+    """Reconstruct the pre-MTF (linear) data from the recorded MTF keys.
+
+    Returns the rebuilt array in orig_dtype. Raises ValueError if the header
+    has no MTF record or marks the transform non-invertible.
+
+    Inversion is exact only for pixels that stayed strictly inside (0, 1) at
+    every forward stage; values that saturated to 0 or 1 (or, in ratio color,
+    channels that clipped) were clamped and cannot be recovered.
+    """
+    if 'MTFINV' not in header:
+        raise ValueError("no MTF transform recorded in header (MTFINV missing); "
+                         "cannot invert")
+    if not bool(header['MTFINV']):
+        raise ValueError("transformation is not invertible")
+
+    missing = [k for k in ('MTFK', 'MTFBLK', 'MTFWHT', 'MTFNMIN', 'MTFNMAX')
+               if k not in header]
+    if missing:
+        raise ValueError("MTF record incomplete, missing keys: " + ", ".join(missing))
+
+    K = float(header['MTFK'])
+    black = float(header['MTFBLK'])
+    white = float(header['MTFWHT'])
+    nmin = float(header['MTFNMIN'])
+    nmax = float(header['MTFNMAX'])
+    lum_mode = str(header.get('MTFLUM', 'green')).strip().lower()
+    color_mode = str(header.get('MTFCOL', 'none')).strip().lower()
+
+    rng = (nmax - nmin) if (nmax - nmin) != 0 else 1.0
+    x2 = np.clip((data.astype(np.float64) - nmin) / rng, 0.0, 1.0)
+    inv_k = 1.0 - K
+    is_color = (x2.ndim == 3 and x2.shape[0] == 3)
+
+    if is_color and color_mode == 'ratio':
+        if lum_mode == 'equal':
+            lum_new = np.mean(x2, axis=0)
+        else:
+            lum_new = (x2[0] + 2.0 * x2[1] + x2[2]) / 4.0
+        lum_old = apply_mtf(lum_new, inv_k)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            scale = np.where(lum_new > 0.0, lum_old / lum_new, 0.0)
+        x1 = x2 * scale[np.newaxis, :, :]
+    elif is_color and color_mode == 'hsl':
+        hsl = _rgb_to_hsl(x2)
+        hsl[2] = apply_mtf(hsl[2], inv_k)
+        x1 = _hsl_to_rgb(hsl)
+    else:
+        x1 = apply_mtf(x2, inv_k)
+
+    # Undo black/white remapping, then denormalize with the recorded scale
+    x0 = np.clip(x1 * (white - black) + black, 0.0, 1.0)
+    return denormalize_from_01(x0, orig_dtype, nmin, nmax)
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +818,7 @@ def process_file(infile, outfile, config):
     ks = config['ks']
     median_target = config['median_target']
     restore_zeros = config['zero']
+    inverse = config['inverse']
     clip = config['clip']
     keepcolor_k = config['keepcolor_k']
     keepcolor_hsl_k = config['keepcolor_hsl_k']
@@ -729,11 +834,30 @@ def process_file(infile, outfile, config):
         header = hdul[0].header.copy()
         orig_dtype = data.dtype
 
+    out_dir = os.path.dirname(outfile)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    # --- Inverse mode: rebuild linear data from the recorded MTF keys ---
+    if inverse:
+        out_data = _mtf_inverse(data, header, orig_dtype)
+        # Restore no-data zeros only where 0 is unambiguously "no data": unsigned
+        # int / float (the forward maps 0 -> 0). For signed int, 0 normalizes to
+        # 0.5 (a valid midtone), so forcing it would corrupt real data.
+        if not np.issubdtype(orig_dtype, np.signedinteger):
+            out_data[data == 0] = 0
+        for key in _MTF_KEYS + ("BSCALE", "BZERO"):
+            if key in header:
+                del header[key]
+        header["HISTORY"] = "MTF inverted by mtf.py --inverse (restored linearity)"
+        fits.PrimaryHDU(out_data, header=header).writeto(outfile, overwrite=True)
+        return
+
     # --zero: remember where the input is exactly 0 (aligned borders / no-data)
     zero_mask = (data == 0) if restore_zeros else None
 
-    # Normalize to [0, 1]
-    work = normalize_to_01(data, orig_dtype)
+    # Normalize to [0, 1] (scale kept local -> thread-safe, recorded for --inverse)
+    work, nmin, nmax = normalize_to_01(data, orig_dtype)
 
     # Auto black/white detection
     black, white = 0.0, 1.0
@@ -752,17 +876,20 @@ def process_file(infile, outfile, config):
     is_color = (work.ndim == 3 and work.shape[0] == 3)
     if is_color and keepcolor_hsl_k is not None and keepcolor_hsl_k > 0:
         work = apply_mtf_keepcolor_hsl(work, ks, keepcolor_hsl_k)
+        color_mode, color_full = 'hsl', keepcolor_hsl_k >= 1.0
     elif is_color and keepcolor_k is not None and keepcolor_k > 0:
         work = apply_mtf_keepcolor(work, ks, keepcolor_k, equal_lum)
+        color_mode, color_full = 'ratio', keepcolor_k >= 1.0
     else:
         work = apply_multi_mtf(work, ks)
+        color_mode, color_full = 'none', True
 
     # Optional percentile clip (legacy)
     if clip is not None:
         work = clip_black_white(work, clip, orig_dtype)
 
     # Convert back
-    out_data = denormalize_from_01(work, orig_dtype)
+    out_data = denormalize_from_01(work, orig_dtype, nmin, nmax)
 
     # --zero: restore the input's zeros so MTF/normalization never shifts a 0
     if zero_mask is not None:
@@ -772,6 +899,12 @@ def process_file(infile, outfile, config):
     for key in ("BSCALE", "BZERO"):
         if key in header:
             del header[key]
+
+    # Record the transform for --inverse (single-K, no clip, full keepcolor only)
+    invertible = (len(ks) == 1) and (clip is None) and color_full
+    lum_mode = "equal" if equal_lum else "green"
+    _write_mtf_record(header, ks, black, white, nmin, nmax,
+                      lum_mode, color_mode, invertible)
 
     # Build HISTORY
     ks_str = " ".join(f"{k:g}" for k in ks)
@@ -788,12 +921,10 @@ def process_file(infile, outfile, config):
         parts.append(f"keepcolor={keepcolor_k}, lum={lum_str}")
     if clip is not None:
         parts.append(f"clip={clip}%")
+    if not invertible:
+        parts.append("non-invertible")
 
     header["HISTORY"] = f"MTF applied by mtf.py: {', '.join(parts)}"
-
-    out_dir = os.path.dirname(outfile)
-    if out_dir and not os.path.exists(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
 
     fits.PrimaryHDU(out_data, header=header).writeto(outfile, overwrite=True)
 
@@ -817,11 +948,14 @@ def main():
         sys.exit(1)
 
     total = len(io_pairs)
-    if config['median_target'] is not None:
+    if config['inverse']:
+        parts = ["inverse"]
+    elif config['median_target'] is not None:
         parts = [f"median->{config['median_target']:g}"]
+    elif len(config['ks']) == 1:
+        parts = [f"K={config['ks'][0]:g}"]
     else:
-        ks_str = " ".join(f"{k:g}" for k in config['ks'])
-        parts = [f"K=[{ks_str}]" if len(config['ks']) > 1 else f"K={config['ks'][0]:g}"]
+        parts = ["K=[" + " ".join(f"{k:g}" for k in config['ks']) + "]"]
     if config['autoblack']:
         parts.append("autoblack")
     if config['autowhite']:
