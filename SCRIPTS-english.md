@@ -1451,10 +1451,13 @@ Applies tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
 **Syntax**:
 ```
 mtf input_spec output_spec K [K2 K3 ...] [options]
+mtf input_spec output_spec --median T [options]
 ```
 
 **Parameters**:
 - `K [K2 ...]` — midtones balance values (0..1). Multiple K: result = average of all MTFs. Duplicates act as weights.
+- `--median T` (`-m T`) — instead of giving K, auto-pick K so the image median maps to T (0..1); for color the median is taken from luminance. Mutually exclusive with K.
+- `--zero` (`-z`) — zero handling for aligned/invalid borders: ignore zeros when computing `--median`, and restore the input's zero pixels in the output so MTF never shifts a 0 to a non-zero value.
 - `--auto` — auto black/white level detection (linked for color images)
 - `--keepcolor [K]` — preserve color via luminance ratio scaling
 - `--keepcolor-hsl [K]` — preserve color via HSL (better for aggressive stretch)
@@ -1465,6 +1468,8 @@ mtf input_spec output_spec K [K2 K3 ...] [options]
 mtf img.fit out.fit 0.2
 mtf img.fit out.fit 0.1 0.1 0.4 --auto
 mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
+mtf img.fit out.fit --median 0.25 --auto
+mtf aligned.fit out.fit --median 0.25 --auto --zero
 ```
 
 ---

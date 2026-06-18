@@ -1481,10 +1481,13 @@ hotfix img0001.fit out0001.fit --sigma 4 --cold
 **Синтаксис**:
 ```
 mtf input_spec output_spec K [K2 K3 ...] [options]
+mtf input_spec output_spec --median T [options]
 ```
 
 **Параметры**:
 - `K [K2 K3 ...]` — один или несколько значений midtones balance (0..1). Несколько K: результат = среднее MTF по всем K. Дубликаты = веса.
+- `--median T` (`-m T`) — вместо явного K подобрать K так, чтобы медиана кадра попала в T (0..1); для цвета медиана берётся по яркости. Взаимоисключающе с K.
+- `--zero` (`-z`) — обработка нулей (границы выровненных кадров / невалид): игнорировать нули при подсчёте `--median` и восстановить нули входа на выходе, чтобы MTF не сдвигала 0 в ненулевое.
 - `--auto` — автоматическое определение black/white уровней (linked для цветных)
 - `--autoblack` / `--autowhite` — по отдельности
 - `--keepcolor [K]` — сохранение цвета через luminance ratio (K=1 полное, K<1 blend)
@@ -1503,6 +1506,10 @@ mtf img.fit out.fit 0.2
 
 :: Мульти-MTF: тени + хайлайты
 mtf img.fit out.fit 0.1 0.1 0.4
+
+:: По целевой медиане (для выровненных кадров добавить --zero)
+mtf img.fit out.fit --median 0.25 --auto
+mtf aligned.fit out.fit --median 0.25 --auto --zero
 
 :: С автоматическими границами
 mtf img.fit out.fit 0.15 --auto
