@@ -288,25 +288,28 @@ sum *.fit combined.fit
 **Purpose**: Median combining of a FITS image stack.
 
 **Features**:
-- Tiled parallel mode for large images
+- Parallel I/O; auto horizontal-strip tiling when the stack exceeds the memory budget
 - Exact per-pixel median
+- Optional zero-ignoring mode (`--zero`)
 - Uses all CPU cores
 
 **Syntax**:
 ```
-med.py input_spec output.fit [--tile N]
+med.py input_spec output.fit [--memory N] [--zero]
 ```
 
 **Parameters**:
 - `input_spec` — input files
 - `output.fit` — output file
-- `--tile N` — tile size in pixels (default 2048, 0 = no tiling)
+- `--memory N` — memory budget for the stack in GB (default 16; above it, processing switches to horizontal strips)
+- `--zero` — ignore zero pixels: a pixel `== 0` in a frame is excluded from that position's median; the output pixel is `0` only where every frame is `0` there
 
 **Examples**:
 ```bash
 med dark0001.fit master_dark.fit
-med flat*.fit master_flat.fit --tile 1024
-med @list.txt median.fit --tile 0
+med flat*.fit master_flat.fit
+med @list.txt median.fit --memory 8
+med aligned*.fit stacked.fit --zero
 ```
 
 ---
@@ -456,7 +459,7 @@ newflat --camera "ASI2600" --log maint.csv --comment "Sensor cleaning"
 
 **Syntax**:
 ```
-normalize.py input_spec output_spec [basefile.fit] [method]
+normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]
 ```
 
 **Parameters**:
@@ -464,15 +467,22 @@ normalize.py input_spec output_spec [basefile.fit] [method]
 - `output_spec` — output files
 - `basefile.fit` — reference frame (default: first input)
 - `method` — normalization method:
-  - `1` — linear regression (default)
-  - `2` — robust regression (sigma-clipping)
-  - `3` — global iterative normalization of all frames
+  - `1` — linear regression, OLS (default)
+  - `2` — robust regression (sigma-clipping) — recommended for frames with stars
+  - `3` — global iterative normalization of all frames (robust fits)
+- `--sat F` — optional saturation pre-cut: before fitting, ignore pixels brighter than `F × P99.5` in either frame, where `P99.5` is the 99.5th-percentile value (a robust "max", resistant to single hot pixels). `F` in (0, 1]. Off by default.
+
+**Pixel handling (robustness)**:
+- **Zero pixels** (no-data borders from registration) are excluded from the fit in **all** methods — otherwise a matched `(0, 0)` population anchors the regression at the origin (leverage) and biases the offset `C` toward 0.
+- **Saturation** is rejected by the residual sigma-clipping of methods **2** and **3**, not by a value threshold: after calibration the clip level is `raw_sat / flat`, which varies across the field, so no constant tracks it. Method **1** (plain OLS) excludes zeros but does not reject saturation — use method 2 or 3 (or add `--sat`) for frames with saturated stars.
+- `--sat F` is an optional blunt extra guard on top of the above.
 
 **Examples**:
 ```bash
 normalize light0001.fit norm0001.fit
 normalize light0001.fit norm0001.fit reference.fit 2
 normalize *.fit normalized0001.fit 3
+normalize *.fit norm0001.fit 2 --sat 0.8     # also drop pixels above 80% of P99.5
 ```
 
 ---
