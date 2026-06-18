@@ -1482,6 +1482,7 @@ hotfix img0001.fit out0001.fit --sigma 4 --cold
 ```
 mtf input_spec output_spec K [K2 K3 ...] [options]
 mtf input_spec output_spec --median T [options]
+mtf input_spec output_spec --inverse
 ```
 
 **Параметры**:
@@ -1494,6 +1495,9 @@ mtf input_spec output_spec --median T [options]
 - `--keepcolor-hsl [K]` — сохранение через HSL (лучше для агрессивного stretch)
 - `--equal` — равновесная luminance (R+G+B)/3 вместо (R+2G+B)/4
 - `--clip [P]` — клиппинг по перцентилю
+- `--inverse` — численно обратить ранее применённый MTF и восстановить линейные данные. Берёт только вход и выход (без K). Ошибка, если записи нет или преобразование необратимо.
+
+**Обратимое преобразование**: каждый прямой проход записывает точное преобразование в FITS-заголовок (флаг `MTFINV` + `MTFK`/`MTFBLK`/`MTFWHT`/`MTFNMIN`/`MTFNMAX`/`MTFLUM`/`MTFCOL`), так что `--inverse` восстанавливает линейность «по числам» — напр. растянуть → убрать звёзды → `--inverse`. Обращение точно только для ненасыщенных пикселей (значения, упёршиеся в 0/1, теряются); для лучшей точности держи промежуток во float. Необратимо: несколько K, `--clip`, частичный `--keepcolor` (`0<K<1`).
 
 **Auto black**: 3% самых тёмных ячеек фона → median - 5×MAD.
 **Auto white**: медиана верхних 0.01% пикселей.
@@ -1510,6 +1514,9 @@ mtf img.fit out.fit 0.1 0.1 0.4
 :: По целевой медиане (для выровненных кадров добавить --zero)
 mtf img.fit out.fit --median 0.25 --auto
 mtf aligned.fit out.fit --median 0.25 --auto --zero
+
+:: Обратное преобразование (восстановить линейность по записи в заголовке)
+mtf stretched.fit linear.fit --inverse
 
 :: С автоматическими границами
 mtf img.fit out.fit 0.15 --auto

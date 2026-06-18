@@ -1452,6 +1452,7 @@ Applies tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
 ```
 mtf input_spec output_spec K [K2 K3 ...] [options]
 mtf input_spec output_spec --median T [options]
+mtf input_spec output_spec --inverse
 ```
 
 **Parameters**:
@@ -1462,6 +1463,9 @@ mtf input_spec output_spec --median T [options]
 - `--keepcolor [K]` — preserve color via luminance ratio scaling
 - `--keepcolor-hsl [K]` — preserve color via HSL (better for aggressive stretch)
 - `--equal` — equal-weight luminance (R+G+B)/3 instead of (R+2G+B)/4
+- `--inverse` — numerically undo a previously applied MTF and restore the linear data. Takes only input and output (no K). Errors if no record is present or the transform was non-invertible.
+
+**Reversible transform**: every forward run records the exact transform in the FITS header (`MTFINV` flag plus `MTFK`/`MTFBLK`/`MTFWHT`/`MTFNMIN`/`MTFNMAX`/`MTFLUM`/`MTFCOL`), so `--inverse` restores linearity by the numbers — e.g. stretch → star removal → `--inverse`. Inversion is exact only for non-saturated pixels (values clipped to 0/1 are lost); keep float between the two passes for best fidelity. Non-invertible: multiple K, `--clip`, or a partial `--keepcolor` blend (`0<K<1`).
 
 **Examples**:
 ```bash
@@ -1470,6 +1474,7 @@ mtf img.fit out.fit 0.1 0.1 0.4 --auto
 mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
 mtf img.fit out.fit --median 0.25 --auto
 mtf aligned.fit out.fit --median 0.25 --auto --zero
+mtf stretched.fit linear.fit --inverse
 ```
 
 ---

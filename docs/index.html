@@ -906,17 +906,19 @@ sortfits *.fit session.fit --sessions --gap-hours 2</code></pre>
                         <li>Auto black/white по фону и ярким звёздам</li>
                         <li>Сохранение цвета: ratio и HSL методы</li>
                         <li>--zero: игнор и восстановление нулей (границы выровненных кадров)</li>
+                        <li>--inverse: обратимое преобразование — запись в заголовок + точный численный возврат к линейности</li>
                     </ul>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>mtf.py input output K [K2 K3 ...] [--median T] [--zero] [--auto] [--keepcolor [K]] [--keepcolor-hsl [K]]</code>
+                        <code>mtf.py input output K [K2 K3 ...] [--median T] [--zero] [--auto] [--keepcolor [K]] [--keepcolor-hsl [K]]<br>mtf.py input output --inverse</code>
                     </div>
 
                     <div class="params">
                         <h4>Параметры</h4>
                         <div class="param"><span class="param-name">--median T, -m</span><span class="param-desc">подобрать K так, чтобы медиана кадра попала в T (0..1) вместо явного K; для цвета — по яркости</span></div>
                         <div class="param"><span class="param-name">--zero, -z</span><span class="param-desc">игнор нулей (границы/невалид) в медиане и восстановление нулей входа на выходе</span></div>
+                        <div class="param"><span class="param-name">--inverse</span><span class="param-desc">обратить ранее применённый MTF по записи MTF*-ключей в заголовке (точно для ненасыщенных; необратимо при мульти-K / --clip / частичном keepcolor)</span></div>
                     </div>
 
                     <h4>Примеры</h4>
@@ -924,7 +926,8 @@ sortfits *.fit session.fit --sessions --gap-hours 2</code></pre>
 mtf img.fit out.fit 0.1 0.1 0.4 --auto
 mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
 mtf img.fit out.fit --median 0.25 --auto
-mtf aligned.fit out.fit --median 0.25 --auto --zero</code></pre>
+mtf aligned.fit out.fit --median 0.25 --auto --zero
+mtf stretched.fit linear.fit --inverse</code></pre>
                 </div>
             </section>
 
