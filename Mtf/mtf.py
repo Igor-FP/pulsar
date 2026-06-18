@@ -62,6 +62,7 @@ def usage():
         "\n"
         "Usage:\n"
         "  mtf.py input_spec output_spec K [options]\n"
+        "  mtf.py input_spec output_spec --median T [options]\n"
         "\n"
         "Positional arguments:\n"
         "  input_spec       Input file(s): single file, wildcard (*.fit),\n"
@@ -77,6 +78,14 @@ def usage():
         "                   Example: 0.1 0.1 0.4 -> 2/3 weight on K=0.1, 1/3 on K=0.4\n"
         "\n"
         "Options:\n"
+        "  --median T, -m T  Auto-pick K so the image median maps to T, with\n"
+        "                    T in (0,1), instead of giving K directly. For color\n"
+        "                    the median is taken from luminance. Mutually\n"
+        "                    exclusive with positional K; pairs well with --auto.\n"
+        "  --zero, -z        Zero handling for aligned/invalid borders: ignore\n"
+        "                    zeros when computing the --median, and restore the\n"
+        "                    input's zero pixels in the output so MTF never\n"
+        "                    shifts a 0 to a non-zero value.\n"
         "  --clip [P]        After MTF, clip black/white by percentile P\n"
         "                    (default P=0.001). Ignores pixels <= 0.\n"
         "                    Remaps [black_P, white_P] to [0, 1].\n"
@@ -100,6 +109,9 @@ def usage():
         "\n"
         "Examples:\n"
         "  mtf.py img.fit out.fit 0.2\n"
+        "  mtf.py img.fit out.fit --median 0.25 --auto\n"
+        "  mtf.py img.fit out.fit -m 0.2 --keepcolor --auto\n"
+        "  mtf.py img.fit out.fit --median 0.25 --auto --zero\n"
         "  mtf.py img.fit out.fit 0.1 0.2 0.4\n"
         "  mtf.py img.fit out.fit 0.1 0.1 0.4         (weight K=0.1 x2)\n"
         "  mtf.py img.fit out.fit 0.15 --auto\n"
@@ -132,11 +144,27 @@ def parse_args(argv):
     equal_lum = False
     autoblack = False
     autowhite = False
+    median_target = None    # None = disabled; float in (0,1) = target-median mode
+    zero_mode = False       # --zero: ignore zeros in stats, restore them on output
 
     i = 0
     positional = []
     while i < len(args):
-        if args[i] == '--keepcolor-hsl':
+        if args[i] in ('--median', '-m'):
+            i += 1
+            if i >= len(args):
+                sys.stderr.write("Error: --median requires a value T in (0, 1).\n")
+                sys.exit(1)
+            try:
+                median_target = float(args[i])
+            except ValueError:
+                sys.stderr.write("Error: --median value must be a number in (0, 1).\n")
+                sys.exit(1)
+            if median_target <= 0.0 or median_target >= 1.0:
+                sys.stderr.write("Error: --median T must be in range (0, 1) exclusive.\n")
+                sys.exit(1)
+            i += 1
+        elif args[i] == '--keepcolor-hsl':
             keepcolor_hsl_k = 1.0  # default
             i += 1
             if i < len(args) and not args[i].startswith('--'):
@@ -157,6 +185,9 @@ def parse_args(argv):
                     pass
         elif args[i] == '--equal':
             equal_lum = True
+            i += 1
+        elif args[i] in ('--zero', '-z'):
+            zero_mode = True
             i += 1
         elif args[i] == '--auto':
             autoblack = True
@@ -185,24 +216,35 @@ def parse_args(argv):
             positional.append(args[i])
             i += 1
 
-    if len(positional) < 3:
-        usage()
-
-    input_spec = positional[0]
-    output_spec = positional[1]
-
-    # All remaining positional args are K values
-    ks = []
-    for s in positional[2:]:
-        ks.append(_parse_k(s, "K"))
-
-    if not ks:
-        usage()
+    if median_target is not None:
+        # Target-median mode: K is computed per file, not given.
+        if len(positional) < 2:
+            usage()
+        if len(positional) > 2:
+            sys.stderr.write(
+                "Error: --median cannot be combined with explicit K value(s).\n")
+            sys.exit(1)
+        input_spec = positional[0]
+        output_spec = positional[1]
+        ks = []
+    else:
+        if len(positional) < 3:
+            usage()
+        input_spec = positional[0]
+        output_spec = positional[1]
+        # All remaining positional args are K values
+        ks = []
+        for s in positional[2:]:
+            ks.append(_parse_k(s, "K"))
+        if not ks:
+            usage()
 
     return {
         'input_spec': input_spec,
         'output_spec': output_spec,
         'ks': ks,
+        'median_target': median_target,
+        'zero': zero_mode,
         'clip': clip,
         'keepcolor_k': keepcolor_k,
         'keepcolor_hsl_k': keepcolor_hsl_k,
@@ -247,6 +289,44 @@ def apply_multi_mtf(x, ks):
         acc = acc + apply_mtf(x, k)
     acc /= len(ks)
     return np.clip(acc, 0.0, 1.0)
+
+
+def _find_mtf_k(median_norm, target):
+    """Find the MTF parameter K that maps median_norm to target.
+
+    Analytical inverse of the MTF (copied from fits2tiff.py to keep the tool
+    self-contained, per the project's tool-independence rule):
+        target = (1-K)*med / (K + med*(1-2K))
+      => K = med*(1 - target) / (target - 2*target*med + med)
+    """
+    if median_norm <= 0 or median_norm >= 1:
+        return 0.5
+    denom = target - 2.0 * target * median_norm + median_norm
+    if abs(denom) < 1e-15:
+        return 0.5
+    k = median_norm * (1.0 - target) / denom
+    return float(np.clip(k, 0.001, 0.999))
+
+
+def representative_median(work, equal_lum, ignore_zeros=False):
+    """Median of the image in [0,1] space.
+
+    For 3-channel color the median is taken from luminance, matching the
+    --median target and the keepcolor luminance choice (equal_lum).
+    ignore_zeros (--zero): drop zero pixels (aligned-frame borders / no-data)
+    so they do not drag the median down.
+    """
+    if work.ndim == 3 and work.shape[0] == 3:
+        if equal_lum:
+            lum = np.mean(work, axis=0)
+        else:
+            lum = (work[0] + 2.0 * work[1] + work[2]) / 4.0
+    else:
+        lum = work
+    valid = lum[lum > 0] if ignore_zeros else lum.ravel()
+    if valid.size == 0:
+        return 0.5
+    return float(np.median(valid))
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +712,8 @@ def clip_black_white(work, clip_pct, orig_dtype):
 def process_file(infile, outfile, config):
     """Process a single FITS file."""
     ks = config['ks']
+    median_target = config['median_target']
+    restore_zeros = config['zero']
     clip = config['clip']
     keepcolor_k = config['keepcolor_k']
     keepcolor_hsl_k = config['keepcolor_hsl_k']
@@ -647,6 +729,9 @@ def process_file(infile, outfile, config):
         header = hdul[0].header.copy()
         orig_dtype = data.dtype
 
+    # --zero: remember where the input is exactly 0 (aligned borders / no-data)
+    zero_mask = (data == 0) if restore_zeros else None
+
     # Normalize to [0, 1]
     work = normalize_to_01(data, orig_dtype)
 
@@ -657,6 +742,11 @@ def process_file(infile, outfile, config):
 
     # Apply black/white remapping
     work = apply_black_white(work, black, white)
+
+    # Target-median mode: derive K so the (luminance) median maps to T
+    if median_target is not None:
+        med = representative_median(work, equal_lum, ignore_zeros=restore_zeros)
+        ks = [_find_mtf_k(med, median_target)]
 
     # Apply MTF
     is_color = (work.ndim == 3 and work.shape[0] == 3)
@@ -674,6 +764,10 @@ def process_file(infile, outfile, config):
     # Convert back
     out_data = denormalize_from_01(work, orig_dtype)
 
+    # --zero: restore the input's zeros so MTF/normalization never shifts a 0
+    if zero_mask is not None:
+        out_data[zero_mask] = 0
+
     # Update header
     for key in ("BSCALE", "BZERO"):
         if key in header:
@@ -681,7 +775,10 @@ def process_file(infile, outfile, config):
 
     # Build HISTORY
     ks_str = " ".join(f"{k:g}" for k in ks)
-    parts = [f"K=[{ks_str}]"]
+    if median_target is not None:
+        parts = [f"median->{median_target:g} (K={ks_str})"]
+    else:
+        parts = [f"K=[{ks_str}]"]
     if do_autoblack or do_autowhite:
         parts.append(f"black={black:.6f}, white={white:.6f}")
     if is_color and keepcolor_hsl_k is not None:
@@ -720,8 +817,11 @@ def main():
         sys.exit(1)
 
     total = len(io_pairs)
-    ks_str = " ".join(f"{k:g}" for k in config['ks'])
-    parts = [f"K=[{ks_str}]" if len(config['ks']) > 1 else f"K={config['ks'][0]:g}"]
+    if config['median_target'] is not None:
+        parts = [f"median->{config['median_target']:g}"]
+    else:
+        ks_str = " ".join(f"{k:g}" for k in config['ks'])
+        parts = [f"K=[{ks_str}]" if len(config['ks']) > 1 else f"K={config['ks'][0]:g}"]
     if config['autoblack']:
         parts.append("autoblack")
     if config['autowhite']:
