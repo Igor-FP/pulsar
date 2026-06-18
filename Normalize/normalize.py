@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lib"
 import batch_utils as bu
 
 USAGE = """Usage:
-  normalize.py input_spec output_spec [basefile.fit] [method]
+  normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]
 
 Where:
   input_spec   - input FITS: numbered sequence (e.g. img0001.fit),
@@ -24,11 +24,27 @@ Where:
                    2 = robust regression vs reference (sigma-clipped)
                    3 = global iterative normalization of all frames
                  default = 1
+  --sat F      - optional pre-cut: before fitting, ignore pixels brighter
+                 than F * P99.5 (per frame), where P99.5 is the 99.5th
+                 percentile value (a robust "max"). F in (0, 1]. Off by
+                 default. A coarse guard on top of the residual clipping.
 
 Notes:
   - Model: I = B * R + C
     Normalized output is: (I - C) / B
+  - Zero pixels (no-data borders) are excluded from the fit in all methods.
+  - Saturation is handled by residual sigma-clipping (methods 2 and 3),
+    not a fixed threshold: after calibration the clip level varies across
+    the field (raw saturation scaled by 1/flat), so it is not a constant.
+  - Method 1 (plain OLS) excludes zeros but does not reject saturation;
+    use method 2 or 3 for frames with saturated stars.
   - Method 3 ignores basefile if provided.
+
+Examples:
+  normalize.py light0001.fit norm0001.fit
+  normalize.py light0001.fit norm0001.fit reference.fit 2
+  normalize.py *.fit norm0001.fit 3
+  normalize.py *.fit norm0001.fit 2 --sat 0.8
 """
 
 
@@ -115,14 +131,42 @@ def write_fits_data(fname, data, header_like, orig_dtype):
 
 # ---------- Regression helpers ----------
 
-def sample_pixels(ref, img, max_samples=2_000_000):
-    """Collect paired finite pixels from ref and img, with optional subsampling."""
-    mask = np.isfinite(ref) & np.isfinite(img)
+# Robust "max" for the optional --sat cut. A high percentile resists a single
+# hot/cosmic pixel that would otherwise set the scale; 99.9 can still be
+# dominated by hot pixels on some CCDs, so 99.5 is used.
+_SAT_PERCENTILE = 99.5
+
+
+def sample_pixels(ref, img, max_samples=2_000_000, sat_frac=None):
+    """Collect paired valid pixels from ref and img, with optional subsampling.
+
+    Excluded from the fit:
+      - non-finite values (NaN/Inf);
+      - zero pixels in EITHER frame. Zero is the no-data sentinel in this
+        project (registration borders, masked/unexposed areas). A matched
+        (0, 0) population otherwise anchors the regression at the origin via
+        leverage and biases the offset C toward 0; mismatched (0, y)/(x, 0)
+        border pixels act as pure outliers.
+      - if sat_frac is given: pixels brighter than sat_frac * P99.5 in EITHER
+        frame, where P99.5 is the 99.5th-percentile value of that frame's
+        valid pixels (a robust "max"). An optional, blunt value pre-cut.
+
+    Saturation by value is OFF by default: after calibration the clip level is
+    (raw_sat - bias - dark) / flat, which varies across the field and is not a
+    constant, so no fixed threshold tracks it. The always-on saturation
+    handling is the residual sigma-clipping in robust_fit_sigma_clipped
+    (methods 2 and 3); --sat is only a coarse extra guard.
+    """
+    mask = np.isfinite(ref) & np.isfinite(img) & (ref != 0) & (img != 0)
+    if sat_frac is not None and np.any(mask):
+        ref_hi = np.percentile(ref[mask], _SAT_PERCENTILE)
+        img_hi = np.percentile(img[mask], _SAT_PERCENTILE)
+        mask &= (ref <= sat_frac * ref_hi) & (img <= sat_frac * img_hi)
     x = ref[mask].ravel()
     y = img[mask].ravel()
     n = x.size
     if n == 0:
-        raise RuntimeError("No valid pixels for regression.")
+        raise RuntimeError("No overlapping non-zero pixels for regression.")
     if n > max_samples:
         idx = np.random.choice(n, size=max_samples, replace=False)
         x = x[idx]
@@ -130,9 +174,9 @@ def sample_pixels(ref, img, max_samples=2_000_000):
     return x, y
 
 
-def linear_fit(ref, img):
+def linear_fit(ref, img, sat_frac=None):
     """Ordinary least squares fit: img = B * ref + C."""
-    x, y = sample_pixels(ref, img)
+    x, y = sample_pixels(ref, img, sat_frac=sat_frac)
     xm = x.mean()
     ym = y.mean()
     dx = x - xm
@@ -144,9 +188,9 @@ def linear_fit(ref, img):
     return B, C
 
 
-def robust_fit_sigma_clipped(ref, img, max_iter=5, clip_sigma=3.0):
+def robust_fit_sigma_clipped(ref, img, max_iter=5, clip_sigma=3.0, sat_frac=None):
     """Robust linear fit with iterative sigma-clipping."""
-    x, y = sample_pixels(ref, img)
+    x, y = sample_pixels(ref, img, sat_frac=sat_frac)
 
     # Initial OLS
     xm = x.mean()
@@ -186,7 +230,7 @@ def robust_fit_sigma_clipped(ref, img, max_iter=5, clip_sigma=3.0):
 
 # ---------- Global iterative normalization (method 3) ----------
 
-def global_iterative_normalization(data_list, max_iter=5):
+def global_iterative_normalization(data_list, max_iter=5, sat_frac=None):
     """
     Global normalization across all frames.
 
@@ -197,6 +241,9 @@ def global_iterative_normalization(data_list, max_iter=5):
       2) Build common reference R = mean of normalized frames.
       3) Refit each frame to R.
       4) Repeat.
+
+    All fits use robust_fit_sigma_clipped, so zero pixels (excluded in
+    sample_pixels) and saturated pixels do not bias the coefficients.
 
     Gauge: frame 0 is fixed to B_0 = 1, C_0 = 0.
     Returns:
@@ -210,9 +257,9 @@ def global_iterative_normalization(data_list, max_iter=5):
     C = [0.0] + [0.0] * (n - 1)
 
     ref0 = data_list[0]
-    # Initial guess vs frame 0
+    # Initial guess vs frame 0 (robust: reject saturation/outliers by residual)
     for i in range(1, n):
-        bi, ci = linear_fit(ref0, data_list[i])
+        bi, ci = robust_fit_sigma_clipped(ref0, data_list[i], sat_frac=sat_frac)
         if bi == 0:
             bi = 1.0
         B[i] = bi
@@ -230,7 +277,7 @@ def global_iterative_normalization(data_list, max_iter=5):
         B[0] = 1.0
         C[0] = 0.0
         for i in range(1, n):
-            bi, ci = linear_fit(R, data_list[i])
+            bi, ci = robust_fit_sigma_clipped(R, data_list[i], sat_frac=sat_frac)
             if bi == 0:
                 bi = 1.0
             B[i] = bi
@@ -242,6 +289,28 @@ def global_iterative_normalization(data_list, max_iter=5):
 # ---------- Argument parsing ----------
 
 def parse_args(argv):
+    argv = list(argv)
+
+    if "-h" in argv or "--help" in argv:
+        print(USAGE)
+        sys.exit(0)
+
+    sat_frac = None
+    if "--sat" in argv:
+        i = argv.index("--sat")
+        if i + 1 >= len(argv):
+            print("Error: --sat requires a fraction in (0, 1].")
+            sys.exit(1)
+        try:
+            sat_frac = float(argv[i + 1])
+        except ValueError:
+            print("Error: --sat value must be a number in (0, 1].")
+            sys.exit(1)
+        if not (0.0 < sat_frac <= 1.0):
+            print("Error: --sat must be in (0, 1].")
+            sys.exit(1)
+        del argv[i:i + 2]
+
     if len(argv) < 3:
         print(USAGE)
         sys.exit(1)
@@ -270,13 +339,13 @@ def parse_args(argv):
         print("Invalid method code. Must be 1, 2 or 3.")
         sys.exit(1)
 
-    return input_spec, output_spec, basefile, method
+    return input_spec, output_spec, basefile, method, sat_frac
 
 
 # ---------- Main ----------
 
 def main():
-    input_spec, output_spec, basefile, method = parse_args(sys.argv)
+    input_spec, output_spec, basefile, method, sat_frac = parse_args(sys.argv)
 
     # Build (input, output) pairs using shared helper.
     try:
@@ -327,7 +396,7 @@ def main():
                 B_list.append(1.0)
                 C_list.append(0.0)
             else:
-                B, C = linear_fit(ref_data, img)
+                B, C = linear_fit(ref_data, img, sat_frac=sat_frac)
                 if B == 0:
                     B = 1.0
                 B_list.append(B)
@@ -341,7 +410,7 @@ def main():
                 B_list.append(1.0)
                 C_list.append(0.0)
             else:
-                B, C = robust_fit_sigma_clipped(ref_data, img)
+                B, C = robust_fit_sigma_clipped(ref_data, img, sat_frac=sat_frac)
                 if B == 0:
                     B = 1.0
                 B_list.append(B)
@@ -349,7 +418,7 @@ def main():
 
     else:
         # Method 3: global iterative normalization (basefile ignored)
-        B_list, C_list = global_iterative_normalization(data_list)
+        B_list, C_list = global_iterative_normalization(data_list, sat_frac=sat_frac)
 
     # Apply normalization and write outputs
     print(f"Normalizing {n_files} file(s) using method {method}...")

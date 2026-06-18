@@ -145,7 +145,7 @@
                         <tr><td>newflat.py</td><td>Запись в лог обслуживания камеры</td></tr>
                         <tr><td>darkopt.py</td><td>Оптимизированное вычитание дарка</td></tr>
                         <tr><td>sortfits.py</td><td>Сортировка FITS по времени</td></tr>
-                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS)</td></tr>
+                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS, RGB)</td></tr>
                         <tr><td>fft_align.py</td><td>FFT-выравнивание кадров</td></tr>
                         <tr><td>stack.py</td><td>Оптимальное взвешенное сложение с sigma-fade</td></tr>
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
@@ -159,7 +159,7 @@
                         <tr><td>binxy.py</td><td>Программный биннинг 2×2 / 4×4</td></tr>
                         <tr><td>debayer.py</td><td>Демозаика Bayer → RGB</td></tr>
                         <tr><td>raw2fits.py</td><td>Camera RAW → FITS конверсия</td></tr>
-                        <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия</td></tr>
+                        <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия (JPEG/PNG сохраняют FITS-заголовок в метаданных)</td></tr>
                         <tr><td>tiff2fits.py</td><td>TIFF → FITS с восстановлением заголовка</td></tr>
                         <tr><td>absession.py</td><td>CSV генератор для AstroBin</td></tr>
                     </tbody>
@@ -358,29 +358,32 @@ sum *.fit combined.fit</code></pre>
             <section id="med">
                 <div class="script-card">
                     <h3>med.py <span class="badge">стекинг</span></h3>
-                    <p>Медианное комбинирование стека FITS-изображений с тайловым параллельным режимом.</p>
+                    <p>Медианное комбинирование стека FITS-изображений; параллельный ввод-вывод с авто-разбиением на полосы при нехватке памяти.</p>
 
                     <h4>Особенности</h4>
                     <ul>
-                        <li>Тайловый режим для больших изображений</li>
+                        <li>Авто-разбиение на горизонтальные полосы для больших стеков</li>
                         <li>Точная попиксельная медиана</li>
+                        <li>Опциональный режим игнора нулей (--zero)</li>
                         <li>Использует все ядра CPU</li>
                     </ul>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>med.py input_spec output.fit [--tile N]</code>
+                        <code>med.py input_spec output.fit [--memory N] [--zero]</code>
                     </div>
 
                     <div class="params">
                         <h4>Параметры</h4>
-                        <div class="param"><span class="param-name">--tile N</span><span class="param-desc">размер тайла в пикселях (по умолчанию 2048, 0 = без тайлов)</span></div>
+                        <div class="param"><span class="param-name">--memory N</span><span class="param-desc">лимит памяти под стек в ГБ (по умолчанию 16; выше — обработка полосами)</span></div>
+                        <div class="param"><span class="param-name">--zero</span><span class="param-desc">игнор нулей: пиксель ==0 в кадре не учитывается в медиане; в итоге 0 только там, где он 0 во всех кадрах</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>med dark0001.fit master_dark.fit
-med flat*.fit master_flat.fit --tile 1024
-med @list.txt median.fit --tile 0</code></pre>
+med flat*.fit master_flat.fit
+med @list.txt median.fit --memory 8
+med aligned*.fit stacked.fit --zero</code></pre>
                 </div>
             </section>
 
@@ -544,19 +547,24 @@ darkopt light0001.fit opt0001.fit dark.fit cosme.lst</code></pre>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>normalize.py input_spec output_spec [basefile.fit] [method]</code>
+                        <code>normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]</code>
                     </div>
 
                     <div class="params">
                         <h4>Методы</h4>
-                        <div class="param"><span class="param-name">1</span><span class="param-desc">линейная регрессия (по умолчанию)</span></div>
-                        <div class="param"><span class="param-name">2</span><span class="param-desc">робастная регрессия (sigma-clipping)</span></div>
-                        <div class="param"><span class="param-name">3</span><span class="param-desc">глобальная итеративная нормализация</span></div>
+                        <div class="param"><span class="param-name">1</span><span class="param-desc">линейная регрессия, OLS (по умолчанию)</span></div>
+                        <div class="param"><span class="param-name">2</span><span class="param-desc">робастная регрессия (sigma-clipping) — для кадров со звёздами</span></div>
+                        <div class="param"><span class="param-name">3</span><span class="param-desc">глобальная итеративная нормализация (робастные фиты)</span></div>
+                        <div class="param"><span class="param-name">--sat F</span><span class="param-desc">необязательный предобрез: игнорировать пиксели ярче F×P99.5 (per-frame); F в (0,1], по умолчанию выкл.</span></div>
                     </div>
+
+                    <p>Нули (рамки нет-данных) исключаются из подгонки во всех методах. Пересвет отсекается остаточным sigma-clipping методов 2/3 (потолок насыщения после флэта переменный по полю, константой не задаётся); метод 1 нули чистит, но пересвет не режет.</p>
 
                     <h4>Примеры</h4>
                     <pre><code>normalize light0001.fit norm0001.fit
-normalize light0001.fit norm0001.fit reference.fit 2</code></pre>
+normalize light0001.fit norm0001.fit reference.fit 2
+normalize *.fit norm0001.fit 3
+normalize *.fit norm0001.fit 2 --sat 0.8</code></pre>
                 </div>
             </section>
 
@@ -798,7 +806,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
 
                 <div class="script-card">
                     <h3>autosolve.py <span class="badge">выравнивание</span></h3>
-                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL.</p>
+                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL. Поддерживает цветные RGB FITS (3,H,W) — решение по зелёному каналу, репроекция всех трёх каналов.</p>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
@@ -816,6 +824,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--ref file.fit</span><span class="param-desc">референсный кадр</span></div>
                         <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
+                        <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
                     </div>
 
                     <h4>Репроекция (--rectify)</h4>

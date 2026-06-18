@@ -22,16 +22,16 @@ __pycache__/
 # Test/sample data directories
 1/
 
-# View utility (local only)
+# View utility
 View/
 
-# Personal scripts (not for publishing)
+# Personal scripts
 Personal/
 
-# Technology documentation (local reference)
+# Technology documentation
 TechnologyDocs/
 
-# Claude Code local data
+# Claude Code
 .claude/
 
 # SVN
@@ -48,3 +48,6 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+# Local-only files
+local/

@@ -647,15 +647,109 @@ def _save_tiff_rgb32f(result, outfile):
 # File conversion
 # =========================================================================
 
-def _save_image(img, outfile, out_fmt, jpeg_quality):
-    """Save PIL Image in the requested format."""
+def _fits_header_to_json(header):
+    """Serialize FITS header to JSON-compatible dict."""
+    import json
+    result = {}
+    comments = []
+    history = []
+
+    for card in header.cards:
+        key = card.keyword
+        val = card.value
+        if key == 'COMMENT':
+            comments.append(str(val))
+        elif key == 'HISTORY':
+            history.append(str(val))
+        elif key == '' or key is None:
+            continue
+        else:
+            # Convert to JSON-safe type
+            if isinstance(val, (int, float, bool, str)):
+                result[key] = val
+            else:
+                result[key] = str(val)
+
+    if comments:
+        result['_COMMENT'] = comments
+    if history:
+        result['_HISTORY'] = history
+
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _embed_header_in_jpeg(jpeg_path, header_json_str):
+    """Inject FITS header as JPEG COM marker after SOI."""
+    import struct
+
+    header_bytes = header_json_str.encode('utf-8')
+
+    # Truncate if exceeds single COM marker limit (very unlikely)
+    if len(header_bytes) > 65533:
+        header_bytes = header_bytes[:65533]
+
+    com_len = len(header_bytes) + 2  # +2 for length field
+    com_marker = b'\xff\xfe' + struct.pack('>H', com_len) + header_bytes
+
+    with open(jpeg_path, 'rb') as f:
+        jpeg_data = f.read()
+
+    # Insert COM marker after SOI (FF D8)
+    with open(jpeg_path, 'wb') as f:
+        f.write(jpeg_data[:2])   # SOI
+        f.write(com_marker)      # COM with header
+        f.write(jpeg_data[2:])   # rest of JPEG
+
+
+def read_fits_header_from_jpeg(jpeg_path):
+    """Extract FITS header dict from JPEG COM marker. Returns dict or None."""
+    import struct, json
+
+    with open(jpeg_path, 'rb') as f:
+        data = f.read(min(os.path.getsize(jpeg_path), 131072))  # read first 128KB
+
+    pos = 2  # skip SOI (FF D8)
+    while pos < len(data) - 3:
+        if data[pos] != 0xFF:
+            break
+        marker = data[pos + 1]
+        if marker == 0xD9:  # EOI
+            break
+        if marker == 0xFE:  # COM
+            length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
+            comment = data[pos + 4:pos + 2 + length]
+            try:
+                return json.loads(comment.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+        # Skip to next marker
+        if marker in (0xD8, 0x00):
+            pos += 2
+        else:
+            length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
+            pos += 2 + length
+
+    return None
+
+
+def _save_image(img, outfile, out_fmt, jpeg_quality, fits_header=None):
+    """Save PIL Image in the requested format. Embeds FITS header in JPEG."""
     out_dir = os.path.dirname(outfile)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
     if out_fmt == 'jpeg':
         img.save(outfile, 'JPEG', quality=jpeg_quality)
+        if fits_header is not None:
+            header_json = _fits_header_to_json(fits_header)
+            _embed_header_in_jpeg(outfile, header_json)
     elif out_fmt == 'png':
-        img.save(outfile, 'PNG')
+        if fits_header is not None:
+            from PIL.PngImagePlugin import PngInfo
+            pnginfo = PngInfo()
+            pnginfo.add_text("fits_header", _fits_header_to_json(fits_header))
+            img.save(outfile, 'PNG', pnginfo=pnginfo)
+        else:
+            img.save(outfile, 'PNG')
     else:
         img.save(outfile, 'TIFF')
 
@@ -675,6 +769,7 @@ def convert_file(infile, outfile, config):
             raise ValueError(f"File '{infile}' has no primary image data.")
         data = hdul[0].data
         orig_dtype = data.dtype
+        fits_header = hdul[0].header
 
     is_rgb = data.ndim == 3 and data.shape[0] == 3
     if data.ndim != 2 and not is_rgb:
@@ -699,7 +794,7 @@ def convert_file(infile, outfile, config):
         work = np.nan_to_num(work, nan=0.0, posinf=0.0, neginf=0.0)
         result = auto_stretch(work, stretch_target, keepcolor_k, keepcolor_hsl_k)
         img = Image.fromarray(result)
-        _save_image(img, outfile, out_fmt, jpeg_quality)
+        _save_image(img, outfile, out_fmt, jpeg_quality, fits_header)
         return
 
     # Standard conversion (no stretch)
@@ -757,7 +852,7 @@ def convert_file(infile, outfile, config):
         result = _scale_channel(work, out_bits)
         img = Image.fromarray(result)
 
-    _save_image(img, outfile, out_fmt, jpeg_quality)
+    _save_image(img, outfile, out_fmt, jpeg_quality, fits_header)
 
 
 # =========================================================================

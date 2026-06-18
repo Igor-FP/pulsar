@@ -45,6 +45,24 @@ except Exception as e:
     sys.exit(1)
 
 
+# ---------------------- RGB support ----------------------
+def _normalize_rgb_data(data):
+    """Normalize FITS data to standard layout. Returns (data, is_rgb).
+
+    - 2D (ny, nx) -> unchanged, is_rgb=False
+    - 3D (3, ny, nx) -> unchanged, is_rgb=True
+    - 3D (ny, nx, 3) -> transposed to (3, ny, nx), is_rgb=True
+    """
+    if data.ndim == 2:
+        return data, False
+    if data.ndim == 3:
+        if data.shape[0] == 3:
+            return data, True
+        if data.shape[2] == 3:
+            return np.transpose(data, (2, 0, 1)), True
+    return data, False
+
+
 # ---------------------- helpers: OS / paths ----------------------
 def is_windows() -> bool:
     return os.name == "nt"
@@ -159,24 +177,88 @@ def estimate_radius_from_header(hdr, scale_arcsec):
     return max(r, 1.0)
 
 
+# ---------------------- scale / FOV helpers ----------------------
+def _write_scale_fov(wcs_fit_path, verbose):
+    """Compute and write pixel scale and FOV into the solved WCS header."""
+    try:
+        with fits.open(wcs_fit_path, mode="update") as hdul:
+            hdr = hdul[0].header
+            data = hdul[0].data
+            ny, nx = data.shape[-2:]
+            w = WCS(hdr, naxis=2)
+
+            # Extract CD matrix
+            if w.wcs.cd is not None and w.wcs.cd.size == 4:
+                cd = np.array(w.wcs.cd, dtype=float)
+            else:
+                pc = np.array(w.wcs.get_pc(), dtype=float)
+                cdelt = np.array(w.wcs.cdelt, dtype=float)
+                cd = pc * cdelt.reshape(2, 1)
+
+            # Pixel scale (arcsec/pixel) from CD matrix
+            sx = np.hypot(cd[0, 0], cd[1, 0]) * 3600.0  # deg -> arcsec
+            sy = np.hypot(cd[0, 1], cd[1, 1]) * 3600.0
+            scale = (sx + sy) / 2.0
+
+            # FOV in arcminutes
+            fov_x = nx * sx / 60.0
+            fov_y = ny * sy / 60.0
+
+            hdr['SCALE'] = (round(scale, 4), 'Pixel scale [arcsec/pixel]')
+            hdr['FOV1'] = (round(fov_x, 2), 'Field of view X [arcmin]')
+            hdr['FOV2'] = (round(fov_y, 2), 'Field of view Y [arcmin]')
+
+            hdul.flush()
+            print_if_verbose(
+                f"Scale: {scale:.4f} arcsec/pix, "
+                f"FOV: {fov_x:.1f}' x {fov_y:.1f}'", verbose)
+    except Exception as e:
+        print_if_verbose(f"Warning: could not write scale/FOV: {e}", verbose)
+
+
 # ---------------------- astrometry calls ----------------------
 def run_solve_field(input_fits: str,
                     output_wcs: str,
                     tweak_order: int,
                     use_wsl: bool,
                     verbose: bool) -> None:
-    """Call solve-field; write directly to output_wcs via --new-fits."""
-    with fits.open(input_fits) as hdul:
+    """Call solve-field; write directly to output_wcs via --new-fits.
+
+    For RGB input: extracts green channel to a temp mono file for solving,
+    then restores full RGB data into the _wcs.fit output.
+    """
+    with fits.open(input_fits, memmap=False) as hdul:
         hdr = hdul[0].header
+        orig_data = hdul[0].data
+        orig_dtype = orig_data.dtype
+
+    orig_data, is_rgb = _normalize_rgb_data(orig_data)
+
+    # For RGB: extract green channel to temp mono file for solve-field
+    solve_input = input_fits
+    green_tmp = None
+    if is_rgb:
+        green_tmp = os.path.splitext(input_fits)[0] + "_green_tmp.fit"
+        green_data = orig_data[1]  # G channel (index 1)
+        green_hdr = hdr.copy()
+        # Ensure 2D header for solve-field
+        for key in ('NAXIS3',):
+            if key in green_hdr:
+                del green_hdr[key]
+        green_hdr['NAXIS'] = 2
+        fits.PrimaryHDU(data=green_data, header=green_hdr).writeto(
+            green_tmp, overwrite=True)
+        solve_input = green_tmp
+        print_if_verbose("RGB input: extracting G channel for solving", verbose)
 
     ra_hint, dec_hint = parse_ra_dec_from_header(hdr)
     scale, scale_low, scale_high = estimate_scale_from_header(hdr)
 
     if use_wsl:
-        input_cmd = win_to_wsl_path(input_fits)
+        input_cmd = win_to_wsl_path(solve_input)
         output_cmd = win_to_wsl_path(output_wcs)
     else:
-        input_cmd = input_fits
+        input_cmd = solve_input
         output_cmd = output_wcs
 
     solve_args = [
@@ -194,7 +276,6 @@ def run_solve_field(input_fits: str,
     solve_args.append(input_cmd)
 
     if use_wsl:
-        # Use bash login shell to get proper PATH from .bashrc/.profile
         solve_cmd_str = " ".join(shlex.quote(a) for a in solve_args)
         cmd = ["wsl", "bash", "-lc", solve_cmd_str]
     else:
@@ -210,6 +291,24 @@ def run_solve_field(input_fits: str,
     if not os.path.exists(output_wcs):
         raise FileNotFoundError(f"Expected WCS FITS not found: {output_wcs}")
 
+    # For RGB: replace green-only data in _wcs.fit with full RGB,
+    # keeping the solved WCS header
+    if is_rgb:
+        with fits.open(output_wcs, mode="update") as hdul:
+            hdul[0].data = orig_data.astype(orig_dtype)
+            hdul.flush()
+        print_if_verbose("RGB: restored full 3-channel data into WCS output", verbose)
+
+    # Write human-readable scale and FOV into header
+    _write_scale_fov(output_wcs, verbose)
+
+    # Clean up temp green file
+    if green_tmp and os.path.exists(green_tmp):
+        try:
+            os.remove(green_tmp)
+        except OSError:
+            pass
+
 
 def cleanup_astrometry_side_products(input_fits: str, verbose: bool):
     """Remove side products emitted by astrometry.net for this input base."""
@@ -223,6 +322,7 @@ def cleanup_astrometry_side_products(input_fits: str, verbose: bool):
             f"{base}.match",
             f"{base}.solved",
             f"{base}.axy",
+            f"{base}_green_tmp.fit",
         ]
         for f in extras:
             if os.path.exists(f):
@@ -236,8 +336,8 @@ def read_cd_center_scale(wcs_fit_path):
     with fits.open(wcs_fit_path) as hdul:
         hdr = hdul[0].header
         data = hdul[0].data
-    ny, nx = data.shape
-    w = WCS(hdr)
+    ny, nx = data.shape[-2:]
+    w = WCS(hdr, naxis=2)
     if w.wcs.cd is not None and w.wcs.cd.size == 4:
         cd = np.array(w.wcs.cd, dtype=float)
     else:
@@ -253,7 +353,7 @@ def read_full_wcs_header(wcs_fit_path):
     with fits.open(wcs_fit_path) as hdul:
         hdr = hdul[0].header.copy()
         data = hdul[0].data
-    ny, nx = data.shape
+    ny, nx = data.shape[-2:]
     return hdr, (ny, nx)
 
 
@@ -262,16 +362,50 @@ def build_rectified_wcs_header(wcs_fits: str,
                                pixscale_arcsec,
                                base_cd: Optional[np.ndarray],
                                base_shape: Optional[Tuple[int, int]],
-                               base_hdr_full: Optional[fits.Header]):
+                               base_hdr_full: Optional[fits.Header],
+                               no_rotate: bool = False):
     """
     Create target WCS header.
 
-    Priority:
-    - If base_hdr_full is given: use it AS-IS (full WCS of the first frame: SIP, CD, CRPIX);
-      that makes all outputs live on the exact grid of frame #1 (PixInsight-like behavior).
+    If no_rotate: use the current file's own CD matrix (preserving rotation)
+    but create a pure TAN projection (strip SIP distortion only).
+
+    Otherwise:
+    - If base_hdr_full is given: use it AS-IS (full WCS of the first frame).
     - Else if base_cd is given: use TAN with that CD (same scale+angle signs).
     - Else: fallback to diagonal TAN with signs/scale estimated from current file.
     """
+    # --no-rotate: strip SIP distortion but keep original rotation
+    if no_rotate:
+        with fits.open(wcs_fits) as hdul:
+            hdr = hdul[0].header
+            data = hdul[0].data
+        ny, nx = data.shape[-2:]
+        w = WCS(hdr, naxis=2)
+
+        # Extract CD matrix WITH rotation from solved WCS
+        if w.wcs.cd is not None and w.wcs.cd.size == 4:
+            cd = np.array(w.wcs.cd, dtype=float)
+        else:
+            pc = np.array(w.wcs.get_pc(), dtype=float)
+            cdelt = np.array(w.wcs.cdelt, dtype=float)
+            cd = pc * cdelt.reshape(2, 1)
+
+        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+
+        # Pure TAN with original CD (rotation preserved, SIP stripped)
+        w_tan = WCS(naxis=2)
+        w_tan.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+        w_tan.wcs.crval = [ra_c, dec_c]
+        w_tan.wcs.crpix = [nx / 2.0, ny / 2.0]
+        w_tan.wcs.cd = cd
+
+        hdr_tan = w_tan.to_header()
+        hdr_tan["NAXIS"] = 2
+        hdr_tan["NAXIS1"] = nx
+        hdr_tan["NAXIS2"] = ny
+        return hdr_tan, (ny, nx)
+
     if base_hdr_full is not None:
         hdr_tan = base_hdr_full.copy()
         nx = hdr_tan.get("NAXIS1")
@@ -281,7 +415,7 @@ def build_rectified_wcs_header(wcs_fits: str,
                 ny, nx = base_shape
             else:
                 with fits.open(wcs_fits) as hdul:
-                    ny, nx = hdul[0].data.shape
+                    ny, nx = hdul[0].data.shape[-2:]
             hdr_tan["NAXIS"] = 2
             hdr_tan["NAXIS1"] = int(nx)
             hdr_tan["NAXIS2"] = int(ny)
@@ -290,8 +424,8 @@ def build_rectified_wcs_header(wcs_fits: str,
     with fits.open(wcs_fits) as hdul:
         hdr = hdul[0].header
         data = hdul[0].data
-    ny, nx = data.shape
-    w = WCS(hdr)
+    ny, nx = data.shape[-2:]
+    w = WCS(hdr, naxis=2)
 
     if center_ra_dec is not None:
         ra_c, dec_c = center_ra_dec
@@ -348,6 +482,62 @@ def merge_headers_preserve_wcs(rect_hdr, src_hdr):
     return new_hdr
 
 
+def _sanitize_2d(data_2d):
+    """Replace NaN/Inf with fill value in a 2D float32 array. Returns sanitized copy."""
+    data_2d = np.asarray(data_2d, dtype=np.float32)
+    finite_mask = np.isfinite(data_2d)
+    if not finite_mask.any():
+        return None  # signal: all NaN
+    if not finite_mask.all():
+        fill = float(np.median(data_2d[finite_mask]))
+        data_2d[~finite_mask] = fill
+    return data_2d
+
+
+def _reproject_2d(data_2d, wcs_in, wcs_out, ny, nx, rect_method, verbose):
+    """Reproject a single 2D plane using interp or exact method."""
+    try:
+        if wcs_in.to_header(relax=True) == wcs_out.to_header(relax=True):
+            return data_2d.copy()
+    except Exception:
+        pass
+
+    try:
+        if rect_method == "interp":
+            result, _ = reproject_interp(
+                (data_2d, wcs_in), wcs_out,
+                shape_out=(ny, nx), return_footprint=True)
+        else:
+            result, _ = reproject_exact(
+                (data_2d, wcs_in), wcs_out,
+                shape_out=(ny, nx), return_footprint=True)
+    except Exception as e:
+        print_if_verbose(
+            f"Warning: reproject_{rect_method} failed ({e}); "
+            f"falling back to reproject_interp.", verbose)
+        result, _ = reproject_interp(
+            (data_2d, wcs_in), wcs_out,
+            shape_out=(ny, nx), return_footprint=True)
+    return result
+
+
+def _wcsresample_2d(input_2d_fits, rect_wcs_path, output_path, use_wsl, verbose):
+    """Run wcs-resample on a single 2D FITS. Returns True on success."""
+    if use_wsl:
+        inp = win_to_wsl_path(input_2d_fits)
+        wcs_p = win_to_wsl_path(rect_wcs_path)
+        out = win_to_wsl_path(output_path)
+        cmd = ["wsl", "wcs-resample", inp, wcs_p, out]
+    else:
+        cmd = ["wcs-resample", input_2d_fits, rect_wcs_path, output_path]
+
+    print_if_verbose("Running: " + " ".join(cmd), verbose)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if verbose:
+        print(res.stdout, file=sys.stderr)
+    return res.returncode == 0 and os.path.exists(output_path)
+
+
 def run_wcs_resample(wcs_fits: str,
                      output_rect: str,
                      center_ra_dec,
@@ -357,110 +547,127 @@ def run_wcs_resample(wcs_fits: str,
                      base_cd: Optional[np.ndarray],
                      base_shape: Optional[Tuple[int, int]],
                      base_hdr_full: Optional[fits.Header],
-                     rect_method: str) -> None:
-    """Resample into target grid using chosen method, then merge metadata."""
+                     rect_method: str,
+                     no_rotate: bool = False) -> None:
+    """Resample into target grid using chosen method, then merge metadata.
+
+    Supports both 2D (mono) and 3D (RGB) input in wcs_fits.
+    For RGB: reprojects each channel separately, then stacks.
+    If no_rotate: strips SIP distortion but preserves field rotation.
+    """
     rect_wcs_hdr, (ny, nx) = build_rectified_wcs_header(
         wcs_fits, center_ra_dec=center_ra_dec, pixscale_arcsec=pixscale_arcsec,
-        base_cd=base_cd, base_shape=base_shape, base_hdr_full=base_hdr_full
+        base_cd=base_cd, base_shape=base_shape, base_hdr_full=base_hdr_full,
+        no_rotate=no_rotate
     )
 
+    # Read input data and detect RGB
+    with fits.open(wcs_fits, memmap=False) as src_hdul:
+        data_raw = src_hdul[0].data
+        src_wcs_hdr = src_hdul[0].header
+
+    data_raw, is_rgb = _normalize_rgb_data(data_raw)
+
     if rect_method == "wcsresample":
+        # Create target WCS template (always 2D)
         rect_wcs_path = os.path.splitext(output_rect)[0] + "_rectwcs_tmp.fit"
         fits.PrimaryHDU(data=np.zeros((ny, nx), dtype=np.float32),
                         header=rect_wcs_hdr).writeto(rect_wcs_path, overwrite=True)
 
-        if use_wsl:
-            inp = win_to_wsl_path(wcs_fits)
-            wcs_p = win_to_wsl_path(rect_wcs_path)
-            out = win_to_wsl_path(output_rect)
-            cmd = ["wsl", "wcs-resample", inp, wcs_p, out]
-        else:
-            cmd = ["wcs-resample", wcs_fits, rect_wcs_path, output_rect]
+        if is_rgb:
+            # Per-channel wcs-resample
+            ch_results = []
+            base_tmp = os.path.splitext(output_rect)[0]
+            for ch_idx, ch_name in enumerate(["R", "G", "B"]):
+                ch_tmp_in = f"{base_tmp}_ch{ch_name}_tmp.fit"
+                ch_tmp_out = f"{base_tmp}_ch{ch_name}_rect_tmp.fit"
+                # Write mono channel with WCS header
+                ch_hdr = src_wcs_hdr.copy()
+                if 'NAXIS3' in ch_hdr:
+                    del ch_hdr['NAXIS3']
+                ch_hdr['NAXIS'] = 2
+                fits.PrimaryHDU(data=data_raw[ch_idx].astype(np.float32),
+                                header=ch_hdr).writeto(ch_tmp_in, overwrite=True)
+                if not _wcsresample_2d(ch_tmp_in, rect_wcs_path, ch_tmp_out, use_wsl, verbose):
+                    raise RuntimeError(f"wcs-resample failed for {ch_name} channel")
+                with fits.open(ch_tmp_out, memmap=False) as h:
+                    ch_results.append(h[0].data.astype(np.float32))
+                # Clean up temps
+                for f in (ch_tmp_in, ch_tmp_out):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
 
-        print_if_verbose("Running: " + " ".join(cmd), verbose)
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        if verbose:
-            print(res.stdout, file=sys.stderr)
+            data_out = np.stack(ch_results, axis=0)
+        else:
+            # Mono: single wcs-resample call (original behavior)
+            if use_wsl:
+                inp = win_to_wsl_path(wcs_fits)
+                wcs_p = win_to_wsl_path(rect_wcs_path)
+                out = win_to_wsl_path(output_rect)
+                cmd = ["wsl", "wcs-resample", inp, wcs_p, out]
+            else:
+                cmd = ["wcs-resample", wcs_fits, rect_wcs_path, output_rect]
+
+            print_if_verbose("Running: " + " ".join(cmd), verbose)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if verbose:
+                print(res.stdout, file=sys.stderr)
+
+            if res.returncode != 0:
+                raise RuntimeError("wcs-resample failed")
+            if not os.path.exists(output_rect):
+                raise FileNotFoundError(f"Expected rectified FITS not found: {output_rect}")
+            data_out = None  # already written by wcs-resample
 
         try:
             os.remove(rect_wcs_path)
         except OSError:
             pass
 
-        if res.returncode != 0:
-            raise RuntimeError("wcs-resample failed")
-        if not os.path.exists(output_rect):
-            raise FileNotFoundError(f"Expected rectified FITS not found: {output_rect}")
+        # For RGB: write stacked result
+        if is_rgb and data_out is not None:
+            fits.PrimaryHDU(data=data_out,
+                            header=rect_wcs_hdr).writeto(output_rect, overwrite=True)
 
     else:
+        # interp / exact methods
         if not _have_reproject:
             raise RuntimeError("reproject is not installed. Install with: pip install reproject")
 
-        with fits.open(wcs_fits) as src:
-            data_in = src[0].data.astype(np.float32)
-            wcs_in = WCS(src[0].header)
+        wcs_in = WCS(src_wcs_hdr, naxis=2)
+        wcs_out = WCS(rect_wcs_hdr, naxis=2)
 
-        wcs_out = WCS(rect_wcs_hdr)
-
-        # If WCS are effectively identical, skip reprojection and just copy data
-        try:
-            if wcs_in.to_header(relax=True) == wcs_out.to_header(relax=True):
-                data_out = data_in.copy()
-            else:
-                try:
-                    if rect_method == "interp":
-                        data_out, _ = reproject_interp(
-                            (data_in, wcs_in),
-                            wcs_out,
-                            shape_out=(ny, nx),
-                            return_footprint=True,
-                        )
-                    else:  # "exact"
-                        data_out, _ = reproject_exact(
-                            (data_in, wcs_in),
-                            wcs_out,
-                            shape_out=(ny, nx),
-                            return_footprint=True,
-                        )
-                except Exception as e:
-                    print(
-                        f"Warning: reproject_{rect_method} failed ({e}); "
-                        f"falling back to reproject_interp.", file=sys.stderr
-                    )
-                    data_out, _ = reproject_interp(
-                        (data_in, wcs_in),
-                        wcs_out,
-                        shape_out=(ny, nx),
-                        return_footprint=True,
-                    )
-        except Exception as e:
-            # If any unexpected WCS comparison error happens, just fall back to interp
-            print_if_verbose(f"Warning: WCS compare failed ({e}); using reproject_interp.", verbose)
-            data_out, _ = reproject_interp(
-                (data_in, wcs_in),
-                wcs_out,
-                shape_out=(ny, nx),
-                return_footprint=True,
-            )
-
-        # Robust NaN/Inf handling to avoid "black" or broken frames
-        data_out = np.asarray(data_out, dtype=np.float32)
-        finite_mask = np.isfinite(data_out)
-        if not finite_mask.any():
-            # If everything is NaN, keep original image as last-resort fallback
-            print_if_verbose(
-                f"Warning: reproject produced only NaNs for {os.path.basename(wcs_fits)}; "
-                f"copying original data.", verbose
-            )
-            data_out = data_in.copy()
+        if is_rgb:
+            # Per-channel reprojection
+            ch_results = []
+            for ch_idx in range(3):
+                ch_in = data_raw[ch_idx].astype(np.float32)
+                ch_out = _reproject_2d(ch_in, wcs_in, wcs_out, ny, nx, rect_method, verbose)
+                ch_out = _sanitize_2d(ch_out)
+                if ch_out is None:
+                    print_if_verbose(
+                        f"Warning: reproject produced only NaNs for channel {ch_idx}; "
+                        f"copying original.", verbose)
+                    ch_out = ch_in.copy()
+                ch_results.append(ch_out)
+            data_out = np.stack(ch_results, axis=0)
         else:
-            # Replace non-finite values with median of valid pixels
-            fill = float(np.median(data_out[finite_mask]))
-            data_out[~finite_mask] = fill
+            # Mono reprojection (original behavior)
+            data_in = data_raw.astype(np.float32)
+            data_out = _reproject_2d(data_in, wcs_in, wcs_out, ny, nx, rect_method, verbose)
+            data_out = _sanitize_2d(data_out)
+            if data_out is None:
+                print_if_verbose(
+                    f"Warning: reproject produced only NaNs for {os.path.basename(wcs_fits)}; "
+                    f"copying original data.", verbose)
+                data_out = data_in.copy()
 
         fits.PrimaryHDU(data=data_out,
                         header=rect_wcs_hdr).writeto(output_rect, overwrite=True)
 
+    # Merge non-WCS metadata from source into output
     with fits.open(wcs_fits) as src, fits.open(output_rect, mode="update") as dst:
         new_hdr = merge_headers_preserve_wcs(dst[0].header, src[0].header)
         dst[0].header = new_hdr
@@ -591,7 +798,7 @@ def refit_wcs_from_corr(input_fits: str,
         with fits.open(wcs_fits, mode="update") as hdul:
             data = hdul[0].data
             orig_hdr = hdul[0].header.copy()
-            ny, nx = data.shape
+            ny, nx = data.shape[-2:]
 
             w = WCS(naxis=2)
             w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -696,27 +903,58 @@ def fine_align_inplace(rect_paths: List[str], verbose: bool):
     """
     Load first rect image as reference; align all subsequent rect images to it.
     Shift data by subpixel (cubic spline). Keep headers unchanged.
+
+    For RGB: computes shift from green channel only, applies to all 3 channels.
     """
     if len(rect_paths) <= 1:
         return
 
-    with fits.open(rect_paths[0]) as ref_hdul:
-        ref = ref_hdul[0].data.astype(np.float32)
-    ref = ref - np.median(ref)
-    _despike_inplace(ref)
+    with fits.open(rect_paths[0], memmap=False) as ref_hdul:
+        ref_data = ref_hdul[0].data.astype(np.float32)
+
+    ref_data, ref_is_rgb = _normalize_rgb_data(ref_data)
+
+    # Use green channel for correlation (or mono as-is)
+    if ref_is_rgb:
+        ref_plane = ref_data[1].copy()  # G channel
+    else:
+        ref_plane = ref_data.copy()
+    ref_plane = ref_plane - np.median(ref_plane)
+    _despike_inplace(ref_plane)
 
     for p in rect_paths[1:]:
         try:
             with fits.open(p, mode="update") as hdul:
-                arr = hdul[0].data.astype(np.float32)
-                arr_norm = arr - np.median(arr)
-                _despike_inplace(arr_norm)
-                dy, dx = _phase_corr_shift(ref, arr_norm)
-                shifted = _spline_shift_2d(arr_norm, dy, dx)
-                shifted += np.median(arr)
-
+                raw = hdul[0].data.astype(np.float32)
+                raw, is_rgb = _normalize_rgb_data(raw)
                 orig_dtype = hdul[0].data.dtype
-                out = shifted
+
+                # Compute shift from green channel (or mono)
+                if is_rgb:
+                    corr_plane = raw[1].copy()
+                else:
+                    corr_plane = raw.copy()
+                corr_norm = corr_plane - np.median(corr_plane)
+                _despike_inplace(corr_norm)
+                dy, dx = _phase_corr_shift(ref_plane, corr_norm)
+
+                # Apply shift to all channels
+                if is_rgb:
+                    channels = []
+                    for ch in range(3):
+                        ch_data = raw[ch]
+                        ch_med = np.median(ch_data)
+                        ch_norm = ch_data - ch_med
+                        ch_shifted = _spline_shift_2d(ch_norm, dy, dx)
+                        ch_shifted += ch_med
+                        channels.append(ch_shifted)
+                    shifted = np.stack(channels, axis=0)
+                else:
+                    med = np.median(raw)
+                    raw_norm = raw - med
+                    shifted = _spline_shift_2d(raw_norm, dy, dx)
+                    shifted += med
+
                 if np.issubdtype(orig_dtype, np.integer):
                     info = np.iinfo(orig_dtype)
                     out = np.clip(np.round(shifted), info.min, info.max).astype(orig_dtype)
@@ -771,8 +1009,8 @@ def get_center_from_wcs(wcs_fit_path: str) -> Tuple[float, float]:
     with fits.open(wcs_fit_path) as hdul:
         data = hdul[0].data
         hdr = hdul[0].header
-    ny, nx = data.shape
-    w = WCS(hdr)
+    ny, nx = data.shape[-2:]
+    w = WCS(hdr, naxis=2)
     ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
     return float(ra_c), float(dec_c)
 
@@ -796,6 +1034,10 @@ def main():
     parser.add_argument("--rect-method", choices=["wcsresample", "interp", "exact"], default="wcsresample",
                         help="Resampling engine: wcsresample (fast), interp (bilinear), exact (highest fidelity).")
 
+    parser.add_argument("--no-rotate", action="store_true",
+                        help="Rectify without derotation: strip SIP distortion but preserve "
+                             "field rotation. Image dimensions unchanged, no black borders. "
+                             "Useful for mosaics, surveys, and tile pyramids.")
     parser.add_argument("--fine-align", action="store_true",
                         help="After rectification, subpixel-align all _rect.fit to the first (phase correlation + cubic spline shift).")
 
@@ -828,7 +1070,10 @@ def main():
     rect_paths_for_fine = []
 
     if args.rectify:
-        if (args.rect_center_ra is not None) and (args.rect_center_dec is not None):
+        if args.no_rotate:
+            # --no-rotate: each file keeps its own orientation, no shared grid
+            use_shared_center = False
+        elif (args.rect_center_ra is not None) and (args.rect_center_dec is not None):
             shared_center = (args.rect_center_ra, args.rect_center_dec)
             use_shared_center = True
         elif not args.individual:
@@ -856,7 +1101,7 @@ def main():
                     sip_degree=args.refit_sip_degree,
                     verbose=args.verbose
                 )
-                if applied and args.rectify and (not args.individual) and base_hdr_full is None and \
+                if applied and args.rectify and (not args.individual) and (not args.no_rotate) and base_hdr_full is None and \
                    (args.rect_center_ra is None and args.rect_center_dec is None and args.rect_pixscale is None):
                     try:
                         base_hdr_full, base_shape = read_full_wcs_header(output_wcs)
@@ -870,7 +1115,7 @@ def main():
                 except Exception as e:
                     print_if_verbose(f"Warning: could not read center from {output_wcs}: {e}", args.verbose)
 
-            if args.rectify and (not args.individual) and base_hdr_full is None and \
+            if args.rectify and (not args.individual) and (not args.no_rotate) and base_hdr_full is None and \
                (args.rect_center_ra is None and args.rect_center_dec is None and args.rect_pixscale is None):
                 try:
                     base_hdr_full, base_shape = read_full_wcs_header(output_wcs)
@@ -889,7 +1134,8 @@ def main():
                     base_cd=base_cd,
                     base_shape=base_shape,
                     base_hdr_full=base_hdr_full,
-                    rect_method=args.rect_method
+                    rect_method=args.rect_method,
+                    no_rotate=args.no_rotate
                 )
                 rect_paths_for_fine.append(output_rect)
 
