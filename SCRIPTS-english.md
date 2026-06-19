@@ -1540,11 +1540,16 @@ Multi-pass pipeline: analyze frames (SNR, FWHM) → weighted average → iterati
 stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]
 ```
 
+**Starless SNR** (optional; default star-based SNR is unchanged):
+By default the per-frame signal (for the SNR² weight and gain normalization) is the median reference-star flux, so a star-less field fatally errors. `--starless` instead estimates the signal from bright cells: the frame is gridded into small cells (`--signal-cell N`, default 16, auto-halving 16→8→4→2→1); signal cells are those valid on every frame (no zero, no saturated pixel) with `mean − background > 5σ` on every frame; the signal is the median, over the middle 30% by brightness, of those cells' `mean − background`. Saturation = `--sat-frac F` (default 0.5) × the per-frame robust max (P99.5), and is disabled when that would fall into the sky/signal range. If even 1px cells yield <3 signal cells, stack exits non-zero so a caller can fall back to median/sum. `--fwhm` is ignored in starless mode.
+
 **Examples**:
 ```bash
 stack *.fit result.fit --sigma
 stack *.fit result.fit --sigma --fwhm
 stack *.fit result.fit --sigma --debug log.txt
+stack neb_*.fit result.fit --sigma --starless          # nebula-only / star-poor field
+stack neb_*.fit result.fit --starless --signal-cell 8
 ```
 
 ---

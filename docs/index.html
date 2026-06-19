@@ -400,18 +400,27 @@ med aligned*.fit stacked.fit --zero</code></pre>
                         <li>Автоматическое выравнивание фона для точного сравнения кадров</li>
                         <li>Нормализация яркости между кадрами</li>
                         <li>Адаптивная многопоточность с контролем памяти</li>
+                        <li>--starless: SNR по ярким клеткам для полей без звёзд</li>
                     </ul>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]</code>
+                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--starless [--signal-cell N] [--sat-frac F]]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Starless (поля без звёзд)</h4>
+                        <div class="param"><span class="param-name">--starless</span><span class="param-desc">сигнал кадра — по ярким клеткам (median по средним 30% от mean−фон) вместо звёздного потока; при провале exit≠0 для фоллбэка</span></div>
+                        <div class="param"><span class="param-name">--signal-cell N</span><span class="param-desc">стартовый размер клетки (16), авто-уменьшение 16→8→4→2→1 до ≥3 клеток</span></div>
+                        <div class="param"><span class="param-name">--sat-frac F</span><span class="param-desc">пересвет = F×P99.5 кадра (0.5); отключается, если падает в диапазон неба/сигнала</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>stack *.fit result.fit --sigma
 stack *.fit result.fit --sigma 2.5 --fade 0.5 --iter 3
 stack *.fit result.fit --sigma --fwhm 0.3
-stack *.fit result.fit --fwhm --nosnr</code></pre>
+stack *.fit result.fit --fwhm --nosnr
+stack neb_*.fit result.fit --sigma --starless</code></pre>
                 </div>
             </section>
 
