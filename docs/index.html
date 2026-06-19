@@ -400,18 +400,27 @@ med aligned*.fit stacked.fit --zero</code></pre>
                         <li>Автоматическое выравнивание фона для точного сравнения кадров</li>
                         <li>Нормализация яркости между кадрами</li>
                         <li>Адаптивная многопоточность с контролем памяти</li>
+                        <li>--starless: SNR по ярким клеткам для полей без звёзд</li>
                     </ul>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]</code>
+                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--starless [--signal-cell N] [--sat-frac F]]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Starless (поля без звёзд)</h4>
+                        <div class="param"><span class="param-name">--starless</span><span class="param-desc">сигнал кадра — по ярким клеткам (median по средним 30% от mean−фон) вместо звёздного потока; при провале exit≠0 для фоллбэка</span></div>
+                        <div class="param"><span class="param-name">--signal-cell N</span><span class="param-desc">стартовый размер клетки (16), авто-уменьшение 16→8→4→2→1 до ≥3 клеток</span></div>
+                        <div class="param"><span class="param-name">--sat-frac F</span><span class="param-desc">пересвет = F×P99.5 кадра (0.5); отключается, если падает в диапазон неба/сигнала</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>stack *.fit result.fit --sigma
 stack *.fit result.fit --sigma 2.5 --fade 0.5 --iter 3
 stack *.fit result.fit --sigma --fwhm 0.3
-stack *.fit result.fit --fwhm --nosnr</code></pre>
+stack *.fit result.fit --fwhm --nosnr
+stack neb_*.fit result.fit --sigma --starless</code></pre>
                 </div>
             </section>
 
@@ -902,19 +911,32 @@ sortfits *.fit session.fit --sessions --gap-hours 2</code></pre>
                     <h4>Особенности</h4>
                     <ul>
                         <li>Несколько значений K для мульти-MTF усреднения</li>
+                        <li>Режим --median T: подобрать K по целевой медиане</li>
                         <li>Auto black/white по фону и ярким звёздам</li>
                         <li>Сохранение цвета: ratio и HSL методы</li>
+                        <li>--zero: игнор и восстановление нулей (границы выровненных кадров)</li>
+                        <li>--inverse: обратимое преобразование — запись в заголовок + точный численный возврат к линейности</li>
                     </ul>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>mtf.py input output K [K2 K3 ...] [--auto] [--keepcolor [K]] [--keepcolor-hsl [K]]</code>
+                        <code>mtf.py input output K [K2 K3 ...] [--median T] [--zero] [--auto] [--keepcolor [K]] [--keepcolor-hsl [K]]<br>mtf.py input output --inverse</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--median T, -m</span><span class="param-desc">подобрать K так, чтобы медиана кадра попала в T (0..1) вместо явного K; для цвета — по яркости</span></div>
+                        <div class="param"><span class="param-name">--zero, -z</span><span class="param-desc">игнор нулей (границы/невалид) в медиане и восстановление нулей входа на выходе</span></div>
+                        <div class="param"><span class="param-name">--inverse</span><span class="param-desc">обратить ранее применённый MTF по записи MTF*-ключей в заголовке (точно для ненасыщенных; необратимо при мульти-K / --clip / частичном keepcolor)</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>mtf img.fit out.fit 0.2
 mtf img.fit out.fit 0.1 0.1 0.4 --auto
-mtf img.fit out.fit 0.01 --keepcolor-hsl --auto</code></pre>
+mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
+mtf img.fit out.fit --median 0.25 --auto
+mtf aligned.fit out.fit --median 0.25 --auto --zero
+mtf stretched.fit linear.fit --inverse</code></pre>
                 </div>
             </section>
 

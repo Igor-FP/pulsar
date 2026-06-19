@@ -74,6 +74,14 @@ def usage():
         "  --poly N      Background polynomial order (default: 3)\n"
         "  --mask-center [D]  Exclude central ellipse D*W x D*H from\n"
         "                 background estimation (default D=0.6).\n"
+        "\n"
+        "Starless SNR (optional; default star-based SNR is unchanged):\n"
+        "  --starless    Estimate per-frame signal from bright cells instead of\n"
+        "                star photometry (nebula-only / star-poor fields).\n"
+        "  --signal-cell N  Starting signal cell size (default 16); auto-halves\n"
+        "                   16->8->4->2->1 until >=3 signal cells are found.\n"
+        "  --sat-frac F  Saturation = F * per-frame robust max (P99.5); brighter\n"
+        "                cells are excluded (default 0.5).\n"
     )
     sys.exit(1)
 
@@ -81,8 +89,9 @@ def usage():
 def parse_args(argv):
     args = argv[1:]
 
-    value_opts = {'--fade', '--border', '--cell', '--clip', '--poly', '--threads'}
-    flag_set = {'--nosnr'}
+    value_opts = {'--fade', '--border', '--cell', '--clip', '--poly', '--threads',
+                  '--signal-cell', '--sat-frac'}
+    flag_set = {'--nosnr', '--starless'}
     opts = {}
     flags = {}
     positional = []
@@ -213,6 +222,10 @@ def parse_args(argv):
         'mask_center_d': mask_center_d,
         # Performance
         'threads': parse_int('--threads', max(1, (os.cpu_count() or 4) - 1)),
+        # Starless signal (optional; does NOT affect the default star-based path)
+        'starless': flags.get('--starless', False),
+        'signal_cell': parse_int('--signal-cell', 16),
+        'sat_frac': parse_float('--sat-frac', 0.5),
     }
 
 
@@ -412,6 +425,201 @@ def measure_noise(data, bg_model):
 # Pass 0: Analyze frames
 # =========================================================================
 
+def _starless_cell_stats(data, bg_model, cell_size, sat_thr):
+    """Per-cell (mean, bg-mean, valid) for a square cell grid of size cell_size.
+
+    valid = the cell has no zero pixel and no pixel >= sat_thr (this frame).
+    Edge cells partly covered by zero padding contain a zero -> marked invalid.
+    Returns three 1D arrays of length ny*nx (row-major over the cell grid).
+    """
+    h, w = data.shape
+    s = cell_size
+    ny = (h + s - 1) // s
+    nx = (w + s - 1) // s
+    pad_h, pad_w = ny * s - h, nx * s - w
+    if pad_h or pad_w:
+        d = np.pad(data, ((0, pad_h), (0, pad_w)), constant_values=0.0)
+        b = np.pad(bg_model, ((0, pad_h), (0, pad_w)), constant_values=0.0)
+    else:
+        d, b = data, bg_model
+    dc = d.reshape(ny, s, nx, s).transpose(0, 2, 1, 3).reshape(ny * nx, s * s)
+    bc = b.reshape(ny, s, nx, s).transpose(0, 2, 1, 3).reshape(ny * nx, s * s)
+    cell_mean = dc.mean(axis=1)
+    cell_bg = bc.mean(axis=1)
+    valid = (~np.any(dc == 0.0, axis=1)) & (~np.any(dc >= sat_thr, axis=1))
+    return cell_mean, cell_bg, valid
+
+
+def _starless_ladder(signal_cell):
+    """Cell-size ladder: signal_cell, /2, ... down to 1 (e.g. [16,8,4,2,1])."""
+    s = max(1, int(signal_cell))
+    ladder = []
+    while True:
+        ladder.append(s)
+        if s == 1:
+            break
+        s = max(1, s // 2)
+    return ladder
+
+
+def analyze_frames_starless(files, channel, config):
+    """Star-free Pass 0: per-frame signal from bright cells (no star photometry).
+
+    Same return contract as analyze_frames (ref, frames, bg_cache). Background,
+    dark and noise are computed exactly as in the default path; only 'light'
+    (the per-frame signal level, used for SNR weighting AND gain normalization)
+    comes from signal cells instead of star flux.
+
+    Cells are 'valid' if they contain no zero and no saturated pixel on EVERY
+    frame; 'signal' cells additionally have (mean - local bg) > 5*noise on every
+    frame. The largest ladder size yielding >=3 signal cells is used; the middle
+    30% (by brightness, >=3 cells) define the measurement set. Fails (exit 2) if
+    even 1px cells yield <3 -- the caller may then fall back to median/sum.
+    """
+    n = len(files)
+    need_fwhm = config['use_fwhm']
+    sat_frac = config['sat_frac']
+    ladder = _starless_ladder(config['signal_cell'])
+
+    log(f"[pass 0] Analyzing {n} frames (starless signal)...")
+
+    with fits.open(files[0], memmap=False) as _hd:
+        h = int(_hd[0].header['NAXIS2'])
+        w = int(_hd[0].header['NAXIS1'])
+
+    # Per-frame metadata, filled on the first (with_meta) gather pass
+    dark = [0.0] * n
+    noise = [1.0] * n
+    fwhm = [0.0] * n
+    bg_cache = [None] * n
+    meta_done = [False]
+
+    def _gather_one(idx, filepath, cell_size, with_meta):
+        data, _ = load_channel(filepath, channel)
+        if with_meta:
+            coeffs, terms = background.estimate_background_poly(
+                data, cell_size=config['cell_size'], clip_k=config['clip_k'],
+                poly_order=config['poly_order'], mask_center_d=config['mask_center_d'])
+            bg_model = background.render_background(h, w, coeffs, terms)
+            d = float(np.median(bg_model))
+            ns = measure_noise(data, bg_model)
+            if need_fwhm:
+                fw = star_utils.estimate_fwhm(data)
+                if not np.isfinite(fw):
+                    fw = 99.0
+            else:
+                fw = 0.0
+            meta = (coeffs, terms, d, ns, fw)
+            sky, nz = d, ns
+        else:
+            coeffs, terms = bg_cache[idx]
+            bg_model = background.render_background(h, w, coeffs, terms)
+            meta = None
+            sky, nz = dark[idx], noise[idx]
+        # Per-frame saturation threshold = sat_frac * robust max (P99.5). If that
+        # would fall into the sky/signal range (faint field with no bright
+        # population), there is no real saturation -> disable the exclusion.
+        pos = data[data > 0]
+        p995 = float(np.percentile(pos, 99.5)) if pos.size else (sky + nz)
+        sat_thr = sat_frac * p995
+        if sat_thr <= sky + 5.0 * nz:
+            sat_thr = np.inf
+        cmean, cbg, valid = _starless_cell_stats(data, bg_model, cell_size, sat_thr)
+        return idx, (cmean - cbg), valid, meta
+
+    chosen_s = None
+    selected = None
+    workers = max(1, min(config['threads'], n))
+
+    for s in ladder:
+        with_meta = not meta_done[0]
+
+        def _gw(idx, _s=s, _wm=with_meta):
+            return _gather_one(idx, files[idx], _s, _wm)
+
+        def _gmerge(acc, result):
+            idx, sig, valid, meta = result
+            if meta is not None:
+                coeffs, terms, d, ns, fw = meta
+                bg_cache[idx] = (coeffs, terms)
+                dark[idx], noise[idx], fwhm[idx] = d, ns, fw
+            s5 = sig > 5.0 * noise[idx]
+            if acc is None:
+                return [valid.copy(), s5, sig.astype(np.float64)]
+            acc[0] &= valid
+            acc[1] &= s5
+            acc[2] += sig
+            return acc
+
+        # RAM-adaptive parallel gather (same throttling as the other passes)
+        acc = _run_parallel(_gw, list(range(n)), workers,
+                            f"starless {s}px", _gmerge)
+        meta_done[0] = True
+        valid_all, sig5_all, sig_sum = acc
+
+        candidate = valid_all & sig5_all
+        ncand = int(np.count_nonzero(candidate))
+        dbg(f"  starless cell {s}px: {ncand} signal cells")
+        if ncand >= 3:
+            cand_idx = np.flatnonzero(candidate)
+            order = cand_idx[np.argsort(sig_sum[cand_idx])]   # ascending brightness
+            m = len(order)
+            keep = min(m, max(3, int(round(m * 0.30))))
+            start = (m - keep) // 2
+            selected = order[start:start + keep]
+            chosen_s = s
+            log(f"\n  Starless: cell {s}px, {ncand} signal cells, "
+                f"using middle {len(selected)}")
+            break
+
+    if chosen_s is None:
+        sys.stderr.write(
+            "\nError: no signal cells found in starless mode (even at 1px); "
+            "caller may fall back to median/sum.\n")
+        sys.exit(2)
+
+    # --- Assign per-frame signal from the selected cells (re-read frames) ---
+    def _signal_one(idx, filepath):
+        data, _ = load_channel(filepath, channel)
+        coeffs, terms = bg_cache[idx]
+        bg_model = background.render_background(h, w, coeffs, terms)
+        cmean, cbg, _ = _starless_cell_stats(data, bg_model, chosen_s, np.inf)
+        return idx, float(np.median((cmean - cbg)[selected]))
+
+    light = [0.0] * n
+
+    def _sw(idx):
+        return _signal_one(idx, files[idx])
+
+    def _smerge(acc, result):
+        idx, sg = result
+        light[idx] = sg
+        return acc
+
+    _run_parallel(_sw, list(range(n)), workers, "starless signal", _smerge)
+
+    frames = []
+    for i in range(n):
+        snr = light[i] / noise[i] if noise[i] > 0 else 0.0
+        frames.append({'dark': dark[i], 'light': light[i], 'noise': noise[i],
+                       'fwhm': fwhm[i], 'snr': snr})
+
+    ref = {'dark': dark[0], 'light': light[0], 'noise': noise[0],
+           'fwhm': fwhm[0], 'h': h, 'w': w}
+
+    snr_arr = np.array([f['snr'] for f in frames])
+    log(f"\n  Reference: dark={ref['dark']:.1f}, light={ref['light']:.1f}, "
+        f"noise={ref['noise']:.3f}")
+    log(f"  SNR range: {np.min(snr_arr):.1f} .. {np.max(snr_arr):.1f}, "
+        f"median={np.median(snr_arr):.1f}")
+    if need_fwhm:
+        fwhm_arr = np.array([f['fwhm'] for f in frames])
+        log(f"  FWHM range: {np.min(fwhm_arr):.2f} .. {np.max(fwhm_arr):.2f}, "
+            f"median={np.median(fwhm_arr):.2f}")
+
+    return ref, frames, bg_cache
+
+
 def analyze_frames(files, channel, config):
     """
     Analyze all frames: detect reference stars, measure SNR/FWHM,
@@ -425,6 +633,9 @@ def analyze_frames(files, channel, config):
         frames: list of per-frame param dicts (ordered same as files)
         bg_cache: list of (coeffs, terms) tuples for deferred bg rendering
     """
+    if config.get('starless'):
+        return analyze_frames_starless(files, channel, config)
+
     n = len(files)
     need_fwhm = config['use_fwhm']
 
@@ -953,6 +1164,12 @@ def main():
     log(f"  border={config['border']}")
     log(f"  bg: cell={config['cell_size']}, clip={config['clip_k']}, "
         f"poly={config['poly_order']}")
+    if config['starless']:
+        log(f"  starless signal: ON (cell start={config['signal_cell']}, "
+            f"sat-frac={config['sat_frac']})")
+        if config['use_fwhm']:
+            log("  note: --fwhm ignored in --starless mode (no stars for FWHM)")
+            config['use_fwhm'] = False
 
     # Determine mono/RGB from first file
     with fits.open(files[0], memmap=False) as hdul:

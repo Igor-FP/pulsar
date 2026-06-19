@@ -1451,20 +1451,30 @@ Applies tone curve: `mtf(x, m) = (1-m)*x / (m + x*(1-2*m))`
 **Syntax**:
 ```
 mtf input_spec output_spec K [K2 K3 ...] [options]
+mtf input_spec output_spec --median T [options]
+mtf input_spec output_spec --inverse
 ```
 
 **Parameters**:
 - `K [K2 ...]` — midtones balance values (0..1). Multiple K: result = average of all MTFs. Duplicates act as weights.
+- `--median T` (`-m T`) — instead of giving K, auto-pick K so the image median maps to T (0..1); for color the median is taken from luminance. Mutually exclusive with K.
+- `--zero` (`-z`) — zero handling for aligned/invalid borders: ignore zeros when computing `--median`, and restore the input's zero pixels in the output so MTF never shifts a 0 to a non-zero value.
 - `--auto` — auto black/white level detection (linked for color images)
 - `--keepcolor [K]` — preserve color via luminance ratio scaling
 - `--keepcolor-hsl [K]` — preserve color via HSL (better for aggressive stretch)
 - `--equal` — equal-weight luminance (R+G+B)/3 instead of (R+2G+B)/4
+- `--inverse` — numerically undo a previously applied MTF and restore the linear data. Takes only input and output (no K). Errors if no record is present or the transform was non-invertible.
+
+**Reversible transform**: every forward run records the exact transform in the FITS header (`MTFINV` flag plus `MTFK`/`MTFBLK`/`MTFWHT`/`MTFNMIN`/`MTFNMAX`/`MTFLUM`/`MTFCOL`), so `--inverse` restores linearity by the numbers — e.g. stretch → star removal → `--inverse`. Inversion is exact only for non-saturated pixels (values clipped to 0/1 are lost); keep float between the two passes for best fidelity. Non-invertible: multiple K, `--clip`, or a partial `--keepcolor` blend (`0<K<1`).
 
 **Examples**:
 ```bash
 mtf img.fit out.fit 0.2
 mtf img.fit out.fit 0.1 0.1 0.4 --auto
 mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
+mtf img.fit out.fit --median 0.25 --auto
+mtf aligned.fit out.fit --median 0.25 --auto --zero
+mtf stretched.fit linear.fit --inverse
 ```
 
 ---
@@ -1530,11 +1540,16 @@ Multi-pass pipeline: analyze frames (SNR, FWHM) → weighted average → iterati
 stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]
 ```
 
+**Starless SNR** (optional; default star-based SNR is unchanged):
+By default the per-frame signal (for the SNR² weight and gain normalization) is the median reference-star flux, so a star-less field fatally errors. `--starless` instead estimates the signal from bright cells: the frame is gridded into small cells (`--signal-cell N`, default 16, auto-halving 16→8→4→2→1); signal cells are those valid on every frame (no zero, no saturated pixel) with `mean − background > 5σ` on every frame; the signal is the median, over the middle 30% by brightness, of those cells' `mean − background`. Saturation = `--sat-frac F` (default 0.5) × the per-frame robust max (P99.5), and is disabled when that would fall into the sky/signal range. If even 1px cells yield <3 signal cells, stack exits non-zero so a caller can fall back to median/sum. `--fwhm` is ignored in starless mode.
+
 **Examples**:
 ```bash
 stack *.fit result.fit --sigma
 stack *.fit result.fit --sigma --fwhm
 stack *.fit result.fit --sigma --debug log.txt
+stack neb_*.fit result.fit --sigma --starless          # nebula-only / star-poor field
+stack neb_*.fit result.fit --starless --signal-cell 8
 ```
 
 ---
