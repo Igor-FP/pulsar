@@ -224,6 +224,9 @@ def parse_args(argv):
                     i += 1
                 except ValueError:
                     pass
+            if not (0.0 < clip < 100.0):
+                sys.stderr.write("Error: --clip P must be in (0, 100).\n")
+                sys.exit(1)
         else:
             positional.append(args[i])
             i += 1
