@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lib"
 import batch_utils as bu
 
 USAGE = """Usage:
-  normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]
+  normalize.py input_spec output_spec [basefile.fit] [method] [--sat F] [--zero]
 
 Where:
   input_spec   - input FITS: numbered sequence (e.g. img0001.fit),
@@ -28,11 +28,18 @@ Where:
                  than F * P99.5 (per frame), where P99.5 is the 99.5th
                  percentile value (a robust "max"). F in (0, 1]. Off by
                  default. A coarse guard on top of the residual clipping.
+  --zero, -z   - preserve no-data zeros: after the fit (which already ignores
+                 zero pixels in all methods) and the affine transform, restore
+                 the input frame's exact-zero pixels to 0 in the output, so
+                 normalization never shifts a 0 (registration border / no-data)
+                 to a non-zero value. Off by default.
 
 Notes:
   - Model: I = B * R + C
     Normalized output is: (I - C) / B
   - Zero pixels (no-data borders) are excluded from the fit in all methods.
+    With --zero they are additionally restored to 0 in the output (otherwise
+    the affine maps 0 -> -C / B, a small non-zero value).
   - Saturation is handled by residual sigma-clipping (methods 2 and 3),
     not a fixed threshold: after calibration the clip level varies across
     the field (raw saturation scaled by 1/flat), so it is not a constant.
@@ -45,6 +52,7 @@ Examples:
   normalize.py light0001.fit norm0001.fit reference.fit 2
   normalize.py *.fit norm0001.fit 3
   normalize.py *.fit norm0001.fit 2 --sat 0.8
+  normalize.py *.fit norm0001.fit 2 --zero
 """
 
 
@@ -109,7 +117,7 @@ def convert_to_original_dtype(data, orig_dtype):
     return arr
 
 
-def write_fits_data(fname, data, header_like, orig_dtype):
+def write_fits_data(fname, data, header_like, orig_dtype, restore_zeros=False):
     """Write FITS file preserving header, using original dtype and safe clamping."""
     out_data = convert_to_original_dtype(data, orig_dtype)
     header = header_like.copy()
@@ -120,6 +128,8 @@ def write_fits_data(fname, data, header_like, orig_dtype):
             del header[key]
 
     header.add_history("Normalized by normalize.py")
+    if restore_zeros:
+        header.add_history("  input zero pixels preserved (--zero)")
 
     out_dir = os.path.dirname(os.path.abspath(fname))
     if out_dir and not os.path.exists(out_dir):
@@ -311,6 +321,9 @@ def parse_args(argv):
             sys.exit(1)
         del argv[i:i + 2]
 
+    restore_zeros = ("--zero" in argv) or ("-z" in argv)
+    argv = [a for a in argv if a not in ("--zero", "-z")]
+
     if len(argv) < 3:
         print(USAGE)
         sys.exit(1)
@@ -339,13 +352,13 @@ def parse_args(argv):
         print("Invalid method code. Must be 1, 2 or 3.")
         sys.exit(1)
 
-    return input_spec, output_spec, basefile, method, sat_frac
+    return input_spec, output_spec, basefile, method, sat_frac, restore_zeros
 
 
 # ---------- Main ----------
 
 def main():
-    input_spec, output_spec, basefile, method, sat_frac = parse_args(sys.argv)
+    input_spec, output_spec, basefile, method, sat_frac, restore_zeros = parse_args(sys.argv)
 
     # Build (input, output) pairs using shared helper.
     try:
@@ -428,7 +441,12 @@ def main():
         if B == 0:
             B = 1.0
         norm = (data_list[i] - C) / B
-        write_fits_data(output_files[i], norm, headers[i], orig_dtypes[i])
+        if restore_zeros:
+            # --zero: keep the input frame's no-data zeros at 0 instead of
+            # letting the affine (I - C) / B shift them to -C / B.
+            norm[data_list[i] == 0] = 0.0
+        write_fits_data(output_files[i], norm, headers[i], orig_dtypes[i],
+                        restore_zeros=restore_zeros)
         print_progress(i + 1, n_files, prefix="Writing: ")
 
     print("Done.")
