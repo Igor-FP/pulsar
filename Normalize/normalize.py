@@ -98,8 +98,11 @@ def convert_to_original_dtype(data, orig_dtype):
     """
     if np.issubdtype(orig_dtype, np.integer):
         info = np.iinfo(orig_dtype)
-        arr = np.clip(data, info.min, info.max)
+        arr = np.clip(data, info.min, info.max)   # also bounds +/-Inf to max/min
         arr = np.rint(arr)
+        # NaN passes through clip/rint unchanged and casts to garbage on integers
+        # (e.g. INT_MIN); never write NaN to a FITS file.
+        arr[~np.isfinite(arr)] = 0
         return arr.astype(orig_dtype)
 
     if np.issubdtype(orig_dtype, np.floating):
