@@ -28,6 +28,38 @@ _OUTLIER_SIGMA = 3.0    # sigma-clipping for FWHM and elongation outliers
 
 
 # ---------------------------------------------------------
+# SEP configuration
+# ---------------------------------------------------------
+
+# sep caps its internal "object pixel buffer" at 300000 active pixels over the
+# detection threshold. A large extended bright source (a galaxy or rich
+# nebulosity) can put more connected pixels over threshold than that, making
+# sep.extract raise "internal pixel buffer full" — which would otherwise abort
+# the whole caller. Raise the ceiling once (sep is imported lazily inside the
+# functions below, so it is applied on first use, not at module import).
+_PIXSTACK_LIMIT = 10_000_000
+_pixstack_set = False
+
+
+def _ensure_pixstack(sep):
+    """Raise sep's object-pixel buffer once (idempotent)."""
+    global _pixstack_set
+    if not _pixstack_set:
+        try:
+            sep.set_extract_pixstack(_PIXSTACK_LIMIT)
+        except Exception:
+            pass  # older sep lacks the setter; the try/except around extract still guards
+        _pixstack_set = True
+
+
+def _is_pixstack_overflow(exc):
+    """True if exc is sep's object-pixel-buffer ('pixstack') overflow."""
+    msg = str(exc).lower()
+    return ("pixel buffer" in msg or "pixstack" in msg
+            or "object pixels" in msg)
+
+
+# ---------------------------------------------------------
 # StarCatalog — result container
 # ---------------------------------------------------------
 
@@ -316,16 +348,24 @@ def estimate_fwhm(data, snr=38.0, bw=64, bh=64):
     Parameters
     ----------
     data : 2D numpy array
-    snr  : minimum SNR for detection (default 10.0, higher = fewer but better stars)
+    snr  : minimum SNR for detection (default 38.0, higher = fewer but better stars)
     bw, bh : background mesh size in pixels
     """
     import sep
+    _ensure_pixstack(sep)
 
     data = _ensure_sep_data(data)
     bkg_image, bkg_rms = _estimate_background(data, bw, bh)
     data_sub = data - bkg_image
 
-    catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+    try:
+        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+    except Exception as exc:
+        if _is_pixstack_overflow(exc):
+            print("WARNING: sep pixel buffer overflow (large extended source); "
+                  "no FWHM estimate", file=sys.stderr)
+            return float('nan')
+        raise
     mask = _filter_stars(data_sub, catalog, data.shape)
 
     if not np.any(mask):
@@ -359,12 +399,22 @@ def detect_stars(data, snr=5.0, photometry=False, bw=64, bh=64):
     StarCatalog with sub-pixel positions, flux, FWHM, elongation, etc.
     """
     import sep
+    _ensure_pixstack(sep)
 
     data = _ensure_sep_data(data)
     bkg_image, bkg_rms = _estimate_background(data, bw, bh)
     data_sub = data - bkg_image
 
-    catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+    try:
+        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+    except Exception as exc:
+        if _is_pixstack_overflow(exc):
+            # A galaxy-/nebula-dominated frame is not a star field: degrade to
+            # "no stars" instead of crashing the caller.
+            print("WARNING: sep pixel buffer overflow (large extended source); "
+                  "treating frame as no stars", file=sys.stderr)
+            return StarCatalog.empty()
+        raise
     mask = _filter_stars(data_sub, catalog, data.shape)
 
     if not np.any(mask):

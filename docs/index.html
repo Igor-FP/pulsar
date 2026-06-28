@@ -556,7 +556,7 @@ darkopt light0001.fit opt0001.fit dark.fit cosme.lst</code></pre>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]</code>
+                        <code>normalize.py input_spec output_spec [basefile.fit] [method] [--sat F] [--zero]</code>
                     </div>
 
                     <div class="params">
@@ -565,15 +565,17 @@ darkopt light0001.fit opt0001.fit dark.fit cosme.lst</code></pre>
                         <div class="param"><span class="param-name">2</span><span class="param-desc">робастная регрессия (sigma-clipping) — для кадров со звёздами</span></div>
                         <div class="param"><span class="param-name">3</span><span class="param-desc">глобальная итеративная нормализация (робастные фиты)</span></div>
                         <div class="param"><span class="param-name">--sat F</span><span class="param-desc">необязательный предобрез: игнорировать пиксели ярче F×P99.5 (per-frame); F в (0,1], по умолчанию выкл.</span></div>
+                        <div class="param"><span class="param-name">--zero, -z</span><span class="param-desc">восстановить нули нет-данных входа в 0 на выходе (фит и так игнорирует нули); иначе аффин сдвигает 0 → -C/B. По умолчанию выкл.</span></div>
                     </div>
 
-                    <p>Нули (рамки нет-данных) исключаются из подгонки во всех методах. Пересвет отсекается остаточным sigma-clipping методов 2/3 (потолок насыщения после флэта переменный по полю, константой не задаётся); метод 1 нули чистит, но пересвет не режет.</p>
+                    <p>Нули (рамки нет-данных) исключаются из подгонки во всех методах; с --zero они дополнительно восстанавливаются в 0 на выходе. Пересвет отсекается остаточным sigma-clipping методов 2/3 (потолок насыщения после флэта переменный по полю, константой не задаётся); метод 1 нули чистит, но пересвет не режет.</p>
 
                     <h4>Примеры</h4>
                     <pre><code>normalize light0001.fit norm0001.fit
 normalize light0001.fit norm0001.fit reference.fit 2
 normalize *.fit norm0001.fit 3
-normalize *.fit norm0001.fit 2 --sat 0.8</code></pre>
+normalize *.fit norm0001.fit 2 --sat 0.8
+normalize *.fit norm0001.fit 2 --zero</code></pre>
                 </div>
             </section>
 

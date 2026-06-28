@@ -459,7 +459,7 @@ newflat --camera "ASI2600" --log maint.csv --comment "Sensor cleaning"
 
 **Syntax**:
 ```
-normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]
+normalize.py input_spec output_spec [basefile.fit] [method] [--sat F] [--zero]
 ```
 
 **Parameters**:
@@ -471,9 +471,10 @@ normalize.py input_spec output_spec [basefile.fit] [method] [--sat F]
   - `2` — robust regression (sigma-clipping) — recommended for frames with stars
   - `3` — global iterative normalization of all frames (robust fits)
 - `--sat F` — optional saturation pre-cut: before fitting, ignore pixels brighter than `F × P99.5` in either frame, where `P99.5` is the 99.5th-percentile value (a robust "max", resistant to single hot pixels). `F` in (0, 1]. Off by default.
+- `--zero` (`-z`) — preserve no-data zeros: after the fit (which already ignores zeros) and the affine transform, restore the input frame's exact-zero pixels to `0` in the output, so normalization never shifts a `0` (registration border / no-data) to the non-zero value `-C/B`. Off by default.
 
 **Pixel handling (robustness)**:
-- **Zero pixels** (no-data borders from registration) are excluded from the fit in **all** methods — otherwise a matched `(0, 0)` population anchors the regression at the origin (leverage) and biases the offset `C` toward 0.
+- **Zero pixels** (no-data borders from registration) are excluded from the fit in **all** methods — otherwise a matched `(0, 0)` population anchors the regression at the origin (leverage) and biases the offset `C` toward 0. With `--zero` they are additionally restored to `0` in the output.
 - **Saturation** is rejected by the residual sigma-clipping of methods **2** and **3**, not by a value threshold: after calibration the clip level is `raw_sat / flat`, which varies across the field, so no constant tracks it. Method **1** (plain OLS) excludes zeros but does not reject saturation — use method 2 or 3 (or add `--sat`) for frames with saturated stars.
 - `--sat F` is an optional blunt extra guard on top of the above.
 
@@ -483,6 +484,7 @@ normalize light0001.fit norm0001.fit
 normalize light0001.fit norm0001.fit reference.fit 2
 normalize *.fit normalized0001.fit 3
 normalize *.fit norm0001.fit 2 --sat 0.8     # also drop pixels above 80% of P99.5
+normalize *.fit norm0001.fit 2 --zero        # restore no-data zeros in the output
 ```
 
 ---

@@ -224,6 +224,9 @@ def parse_args(argv):
                     i += 1
                 except ValueError:
                     pass
+            if not (0.0 < clip < 100.0):
+                sys.stderr.write("Error: --clip P must be in (0, 100).\n")
+                sys.exit(1)
         else:
             positional.append(args[i])
             i += 1
@@ -451,7 +454,12 @@ def _compute_autoblack(plane_01):
         return 0.0
 
     n_dark = max(1, int(valid_values.size * 0.03))
-    threshold = np.partition(valid_values, n_dark)[n_dark - 1]
+    if valid_values.size <= n_dark:
+        # Degenerate grid (<=1 valid cell, e.g. a frame <=64 px on both axes):
+        # np.partition needs kth < size, so fall back to the single cell value.
+        threshold = float(valid_values.max())
+    else:
+        threshold = np.partition(valid_values, n_dark)[n_dark - 1]
 
     # Get cell indices where grid value <= threshold and > 0
     dark_cells = np.argwhere((grid <= threshold) & (grid > 0))
@@ -765,8 +773,11 @@ def clip_black_white(work, clip_pct, orig_dtype):
         n_lo = max(1, int(n * clip_pct / 100.0))
         n_hi = max(1, int(n * clip_pct / 100.0))
 
-        partitioned = np.partition(valid, n_lo)
-        black = float(np.median(partitioned[:n_lo]))
+        if n <= n_lo:
+            black = float(np.median(valid))
+        else:
+            partitioned = np.partition(valid, n_lo)
+            black = float(np.median(partitioned[:n_lo]))
 
         idx = n - n_hi
         partitioned = np.partition(valid, idx)
@@ -792,8 +803,11 @@ def clip_black_white(work, clip_pct, orig_dtype):
     n_lo = max(1, int(n * clip_pct / 100.0))
     n_hi = max(1, int(n * clip_pct / 100.0))
 
-    partitioned = np.partition(valid, n_lo)
-    black = float(np.median(partitioned[:n_lo]))
+    if n <= n_lo:
+        black = float(np.median(valid))
+    else:
+        partitioned = np.partition(valid, n_lo)
+        black = float(np.median(partitioned[:n_lo]))
 
     idx = n - n_hi
     partitioned = np.partition(valid, idx)
