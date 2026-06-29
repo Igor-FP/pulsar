@@ -405,7 +405,7 @@ med aligned*.fit stacked.fit --zero</code></pre>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--starless [--signal-cell N] [--sat-frac F]]</code>
+                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--bg-border [W]] [--starless [--signal-cell N] [--sat-frac F]]</code>
                     </div>
 
                     <div class="params">
@@ -415,12 +415,18 @@ med aligned*.fit stacked.fit --zero</code></pre>
                         <div class="param"><span class="param-name">--sat-frac F</span><span class="param-desc">пересвет = F×P99.5 кадра (0.5); отключается, если падает в диапазон неба/сигнала</span></div>
                     </div>
 
+                    <div class="params">
+                        <h4>Граничный фон (мозаики разных футпринтов)</h4>
+                        <div class="param"><span class="param-name">--bg-border [W]</span><span class="param-desc">опц., по умолч. выкл.: уровень неба (dark) по тонкому кольцу данных у реального края кадра вместо всего кадра — убирает DC-шов на границе футпринта для центрированного объекта. W = ширина кольца px (авто = 5% короткой стороны). Не использовать, если объект касается края</span></div>
+                    </div>
+
                     <h4>Примеры</h4>
                     <pre><code>stack *.fit result.fit --sigma
 stack *.fit result.fit --sigma 2.5 --fade 0.5 --iter 3
 stack *.fit result.fit --sigma --fwhm 0.3
 stack *.fit result.fit --fwhm --nosnr
-stack neb_*.fit result.fit --sigma --starless</code></pre>
+stack neb_*.fit result.fit --sigma --starless
+stack obj_*.fit result.fit --sigma --bg-border</code></pre>
                 </div>
             </section>
 
