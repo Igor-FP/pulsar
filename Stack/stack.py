@@ -54,6 +54,12 @@ def usage():
         "                Higher K = stricter preference for sharp frames.\n"
         "  --nosnr       Disable SNR^2 weighting (weight by FWHM only).\n"
         "                Requires --fwhm, otherwise all weights = 1.\n"
+        "  --equalize [K]  Pull all frame weights toward equal by fraction K in\n"
+        "                [0,1] (default 1.0 = fully equal). Turns off SNR/FWHM\n"
+        "                weighting in the SUM while keeping per-frame normalization\n"
+        "                and sigma-clip fade. For frames whose SNR is not comparable\n"
+        "                (e.g. very different scales from different processing).\n"
+        "                Off by default; K=0 = no change.\n"
         "\n"
         "Border options:\n"
         "  --border N    Zero-mask expansion in pixels (default: 1)\n"
@@ -104,6 +110,7 @@ def parse_args(argv):
     sigma_val = None   # None = disabled
     iter_val = None    # None = use default
     fwhm_mtf_k = None  # None = FWHM weighting disabled
+    equalize_k = None  # None = disabled; float in [0,1] = pull weights toward equal
     debug_file = None  # None = no debug; '' = stderr; 'path' = file
     debug_enabled = False
     mask_center_d = None  # None = disabled
@@ -172,6 +179,16 @@ def parse_args(argv):
                     fwhm_mtf_k = 0.5
             else:
                 fwhm_mtf_k = 0.5
+        elif a == '--equalize':
+            # --equalize [K]: optional float in [0,1], default 1.0 (fully equal)
+            if i + 1 < len(args) and not args[i + 1].startswith('-'):
+                try:
+                    equalize_k = float(args[i + 1])
+                    i += 1
+                except ValueError:
+                    equalize_k = 1.0
+            else:
+                equalize_k = 1.0
         elif a in flag_set:
             flags[a] = True
         elif a in value_opts:
@@ -213,6 +230,10 @@ def parse_args(argv):
             sys.stderr.write(f"Error: {key} must be a non-negative integer\n")
             sys.exit(1)
 
+    if equalize_k is not None and not (0.0 <= equalize_k <= 1.0):
+        sys.stderr.write("Error: --equalize K must be in [0, 1]\n")
+        sys.exit(1)
+
     use_sigma = sigma_val is not None
     use_fwhm = fwhm_mtf_k is not None
     use_snr = not flags.get('--nosnr', False)
@@ -229,6 +250,7 @@ def parse_args(argv):
         'use_snr': use_snr,
         'use_fwhm': use_fwhm,
         'fwhm_mtf_k': fwhm_mtf_k if use_fwhm else 0.5,
+        'equalize': equalize_k,
         # Debug
         'debug': debug_enabled,
         'debug_file': debug_file,
@@ -920,7 +942,27 @@ def compute_weights(frames, config):
     else:
         w_fwhm = np.ones(n)
 
-    return w_snr * w_fwhm
+    weights = w_snr * w_fwhm
+
+    # --equalize K: pull every frame weight toward equal by fraction K. Raw
+    # weights are first scaled to mean 1 (so "1" is the neutral/equal value),
+    # then lerped: Wnew = w*(1-K) + K. K=0 -> unchanged optimal weighting
+    # (relative spread intact); K=1 -> all weights 1 (SNR/FWHM weighting off,
+    # every frame contributes equally). Per-frame normalization (dark/light) is
+    # independent of the weights. The clip passes do not read w_i directly
+    # (Pass 2 ignores it; Pass 3 applies w_i only AFTER the fade), but the
+    # weights DO affect clipping INDIRECTLY: the Pass 1 weighted average is the
+    # reference the deviation map / fade are built from. Intentional -- outliers
+    # should be measured against the same-weighting mean that is being summed.
+    K = config.get('equalize')
+    if K is not None:
+        mean_w = float(np.mean(weights))
+        w_norm = weights / mean_w if mean_w > 0 else np.ones(n)
+        weights = w_norm * (1.0 - K) + K
+        log(f"  Equalize: K={K:g} (weight spread x{1.0 - K:g}; "
+            f"{'all frames equal' if K >= 1.0 else 'SNR/FWHM weighting reduced'})")
+
+    return weights
 
 
 # =========================================================================
@@ -1255,6 +1297,8 @@ def main():
     if config['use_fwhm']:
         parts.append(f"FWHM(MTF K={config['fwhm_mtf_k']})")
     log(f"  weight: {' x '.join(parts) if parts else '1.0 (equal)'}")
+    if config.get('equalize') is not None:
+        log(f"  equalize: K={config['equalize']:g} (frame weights pulled toward equal)")
     log(f"  border={config['border']}")
     log(f"  bg: cell={config['cell_size']}, clip={config['clip_k']}, "
         f"poly={config['poly_order']}")
@@ -1322,7 +1366,10 @@ def main():
         w_parts.append('SNR^2')
     if config['use_fwhm']:
         w_parts.append(f'FWHM(K={config["fwhm_mtf_k"]})')
-    header['HISTORY'] = f'stack: weight={" x ".join(w_parts) if w_parts else "equal"}'
+    weight_desc = " x ".join(w_parts) if w_parts else "equal"
+    if config.get('equalize') is not None:
+        weight_desc += f', equalize K={config["equalize"]:g}'
+    header['HISTORY'] = f'stack: weight={weight_desc}'
 
     hdu = fits.PrimaryHDU(data=result_data, header=header)
     hdu.writeto(output_file, overwrite=True)
