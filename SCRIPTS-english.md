@@ -1539,8 +1539,10 @@ Multi-pass pipeline: analyze frames (SNR, FWHM) → weighted average → iterati
 
 **Syntax**:
 ```
-stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]
+stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--equalize [K]]
 ```
+
+**Weight equalization** (`--equalize [K]`, K in [0,1], opt-in, default OFF): pull every frame's stacking weight toward equal by fraction K (default 1.0 = fully equal). Disables the SNR/FWHM weighting in the SUM while keeping per-frame normalization (dark/light) and the sigma-clip fade. For frames whose SNR is not comparable (e.g. very different scales from different processing). Weights are scaled to mean 1, then `Wnew = w*(1-K) + K`; K=0 = no change. Per-frame normalization (dark/light) is independent of the weights; the sigma-clip mechanism still runs, and (since its reference is the Pass 1 weighted average) outliers are measured against the same equal-weighted mean that is summed.
 
 **Border-ring background** (`--bg-border [W]`, opt-in, default OFF): estimate each frame's sky level (`dark`) from a thin ring of data pixels just inside the real-data edge instead of the whole frame. For mosaics of mixed-footprint frames with a centred object this removes the DC seam at the footprint boundary (the ring is object-free → unbiased sky). `W` = ring width in px (default auto = 5% of the short side). The no-data exterior is found by flood-fill from the array edge (interior holes excluded); a full-frame input falls back to the outer array-border band; a degenerate ring falls back to the whole-frame background. Do NOT use if the object touches the frame edge.
 
@@ -1555,6 +1557,7 @@ stack *.fit result.fit --sigma --debug log.txt
 stack neb_*.fit result.fit --sigma --starless          # nebula-only / star-poor field
 stack neb_*.fit result.fit --starless --signal-cell 8
 stack obj_*.fit result.fit --sigma --bg-border         # mixed-footprint mosaic, centred object
+stack mix_*.fit result.fit --sigma --equalize          # equal frame weights (incomparable SNR)
 ```
 
 ---

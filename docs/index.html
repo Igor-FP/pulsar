@@ -405,7 +405,12 @@ med aligned*.fit stacked.fit --zero</code></pre>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--bg-border [W]] [--starless [--signal-cell N] [--sat-frac F]]</code>
+                        <code>stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--equalize [K]] [--bg-border [W]] [--starless [--signal-cell N] [--sat-frac F]]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Выравнивание весов</h4>
+                        <div class="param"><span class="param-name">--equalize [K]</span><span class="param-desc">опц., по умолч. выкл.: притянуть веса кадров к равным на долю K∈[0,1] (1.0 = полностью равные). Отключает SNR/FWHM-взвешивание в сумме, сохраняя нормализацию и сигма-клип. Для кадров с несравнимым SNR. Веса нормируются к среднему=1, затем Wnew=w·(1−K)+K; K=0 — без изменений</span></div>
                     </div>
 
                     <div class="params">
@@ -426,7 +431,8 @@ stack *.fit result.fit --sigma 2.5 --fade 0.5 --iter 3
 stack *.fit result.fit --sigma --fwhm 0.3
 stack *.fit result.fit --fwhm --nosnr
 stack neb_*.fit result.fit --sigma --starless
-stack obj_*.fit result.fit --sigma --bg-border</code></pre>
+stack obj_*.fit result.fit --sigma --bg-border
+stack mix_*.fit result.fit --sigma --equalize</code></pre>
                 </div>
             </section>
 
