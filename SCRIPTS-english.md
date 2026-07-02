@@ -1539,8 +1539,12 @@ Multi-pass pipeline: analyze frames (SNR, FWHM) → weighted average → iterati
 
 **Syntax**:
 ```
-stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr]
+stack.py input_spec output.fit [--sigma [N]] [--fade N] [--iter [N]] [--fwhm [K]] [--nosnr] [--equalize [K]]
 ```
+
+**Weight equalization** (`--equalize [K]`, K in [0,1], opt-in, default OFF): pull every frame's stacking weight toward equal by fraction K (default 1.0 = fully equal). Disables the SNR/FWHM weighting in the SUM while keeping per-frame normalization (dark/light) and the sigma-clip fade. For frames whose SNR is not comparable (e.g. very different scales from different processing). Weights are scaled to mean 1, then `Wnew = w*(1-K) + K`; K=0 = no change. --equalize affects ONLY the final weighted sum: the sigma-clip reference, deviation map and RMS are always built from the optimal weights, so outlier rejection (fade) is identical to a default run and does not depend on K.
+
+**Border-ring background** (`--bg-border [W]`, opt-in, default OFF): estimate each frame's sky level (`dark`) from a thin ring of data pixels just inside the real-data edge instead of the whole frame. For mosaics of mixed-footprint frames with a centred object this removes the DC seam at the footprint boundary (the ring is object-free → unbiased sky). `W` = ring width in px (default auto = 5% of the short side). The no-data exterior is found by flood-fill from the array edge (interior holes excluded); a full-frame input falls back to the outer array-border band; a degenerate ring falls back to the whole-frame background. Do NOT use if the object touches the frame edge.
 
 **Starless SNR** (optional; default star-based SNR is unchanged):
 By default the per-frame signal (for the SNR² weight and gain normalization) is the median reference-star flux, so a star-less field fatally errors. `--starless` instead estimates the signal from bright cells: the frame is gridded into small cells (`--signal-cell N`, default 16, auto-halving 16→8→4→2→1); signal cells are those valid on every frame (no zero, no saturated pixel) with `mean − background > 5σ` on every frame; the signal is the median, over the middle 30% by brightness, of those cells' `mean − background`. Saturation = `--sat-frac F` (default 0.5) × the per-frame robust max (P99.5), and is disabled when that would fall into the sky/signal range. If even 1px cells yield <3 signal cells, stack exits non-zero so a caller can fall back to median/sum. `--fwhm` is ignored in starless mode.
@@ -1552,6 +1556,8 @@ stack *.fit result.fit --sigma --fwhm
 stack *.fit result.fit --sigma --debug log.txt
 stack neb_*.fit result.fit --sigma --starless          # nebula-only / star-poor field
 stack neb_*.fit result.fit --starless --signal-cell 8
+stack obj_*.fit result.fit --sigma --bg-border         # mixed-footprint mosaic, centred object
+stack mix_*.fit result.fit --sigma --equalize          # equal frame weights (incomparable SNR)
 ```
 
 ---

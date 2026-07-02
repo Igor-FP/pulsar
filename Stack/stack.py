@@ -54,6 +54,12 @@ def usage():
         "                Higher K = stricter preference for sharp frames.\n"
         "  --nosnr       Disable SNR^2 weighting (weight by FWHM only).\n"
         "                Requires --fwhm, otherwise all weights = 1.\n"
+        "  --equalize [K]  Pull all frame weights toward equal by fraction K in\n"
+        "                [0,1] (default 1.0 = fully equal). Turns off SNR/FWHM\n"
+        "                weighting in the SUM while keeping per-frame normalization\n"
+        "                and sigma-clip fade. For frames whose SNR is not comparable\n"
+        "                (e.g. very different scales from different processing).\n"
+        "                Off by default; K=0 = no change.\n"
         "\n"
         "Border options:\n"
         "  --border N    Zero-mask expansion in pixels (default: 1)\n"
@@ -74,6 +80,12 @@ def usage():
         "  --poly N      Background polynomial order (default: 3)\n"
         "  --mask-center [D]  Exclude central ellipse D*W x D*H from\n"
         "                 background estimation (default D=0.6).\n"
+        "  --bg-border [W]  Estimate per-frame sky (dark) from a thin ring just\n"
+        "                 inside the real-data edge instead of the whole frame.\n"
+        "                 For centred-object mosaics of mixed footprints this\n"
+        "                 removes the DC seam at footprint boundaries. W = ring\n"
+        "                 width in px (default auto = 5% of the short side).\n"
+        "                 Off by default; do NOT use if the object touches the edge.\n"
         "\n"
         "Starless SNR (optional; default star-based SNR is unchanged):\n"
         "  --starless    Estimate per-frame signal from bright cells instead of\n"
@@ -98,9 +110,12 @@ def parse_args(argv):
     sigma_val = None   # None = disabled
     iter_val = None    # None = use default
     fwhm_mtf_k = None  # None = FWHM weighting disabled
+    equalize_k = None  # None = disabled; float in [0,1] = pull weights toward equal
     debug_file = None  # None = no debug; '' = stderr; 'path' = file
     debug_enabled = False
     mask_center_d = None  # None = disabled
+    bg_border = False     # --bg-border: opt-in border-ring dark
+    bg_border_w = None    # None = auto width (5% short side); int = explicit px
 
     i = 0
     while i < len(args):
@@ -115,6 +130,17 @@ def parse_args(argv):
                     mask_center_d = 0.6
             else:
                 mask_center_d = 0.6
+        elif a == '--bg-border':
+            bg_border = True
+            # --bg-border [W]: optional int ring width; default = auto (5% short side)
+            if i + 1 < len(args) and not args[i + 1].startswith('-'):
+                try:
+                    bg_border_w = int(args[i + 1])
+                    i += 1
+                except ValueError:
+                    bg_border_w = None
+            else:
+                bg_border_w = None
         elif a == '--debug':
             debug_enabled = True
             # --debug [FILE]: optional file argument
@@ -153,6 +179,16 @@ def parse_args(argv):
                     fwhm_mtf_k = 0.5
             else:
                 fwhm_mtf_k = 0.5
+        elif a == '--equalize':
+            # --equalize [K]: optional float in [0,1], default 1.0 (fully equal)
+            if i + 1 < len(args) and not args[i + 1].startswith('-'):
+                try:
+                    equalize_k = float(args[i + 1])
+                    i += 1
+                except ValueError:
+                    equalize_k = 1.0
+            else:
+                equalize_k = 1.0
         elif a in flag_set:
             flags[a] = True
         elif a in value_opts:
@@ -194,6 +230,10 @@ def parse_args(argv):
             sys.stderr.write(f"Error: {key} must be a non-negative integer\n")
             sys.exit(1)
 
+    if equalize_k is not None and not (0.0 <= equalize_k <= 1.0):
+        sys.stderr.write("Error: --equalize K must be in [0, 1]\n")
+        sys.exit(1)
+
     use_sigma = sigma_val is not None
     use_fwhm = fwhm_mtf_k is not None
     use_snr = not flags.get('--nosnr', False)
@@ -210,6 +250,7 @@ def parse_args(argv):
         'use_snr': use_snr,
         'use_fwhm': use_fwhm,
         'fwhm_mtf_k': fwhm_mtf_k if use_fwhm else 0.5,
+        'equalize': equalize_k,
         # Debug
         'debug': debug_enabled,
         'debug_file': debug_file,
@@ -220,6 +261,9 @@ def parse_args(argv):
         'clip_k': parse_float('--clip', 1.7),
         'poly_order': parse_int('--poly', 3),
         'mask_center_d': mask_center_d,
+        # Border-ring dark (opt-in; does NOT affect the default whole-frame dark)
+        'bg_border': bg_border,
+        'bg_border_w': bg_border_w,
         # Performance
         'threads': parse_int('--threads', max(1, (os.cpu_count() or 4) - 1)),
         # Starless signal (optional; does NOT affect the default star-based path)
@@ -421,6 +465,78 @@ def measure_noise(data, bg_model):
     return float(np.std(r)) if r.size > 0 else 1.0
 
 
+# Border ring: a thin band of DATA pixels just inside the real-data edge.
+_BORDER_RING_MIN_PIX = 50   # below this the ring is unreliable -> fall back
+
+
+def _border_exterior_mask(nodata):
+    """No-data region 4-connected to the array border (rotation/scale margins).
+
+    Interior no-data holes (e.g. masked saturated star cores) are NOT
+    border-connected, so they are excluded. O(N), no Python loop.
+    """
+    from scipy import ndimage
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)  # 4-conn
+    lbl, nlab = ndimage.label(nodata, structure=structure)
+    if nlab == 0:
+        return np.zeros_like(nodata, dtype=bool)
+    edge = set(lbl[0, :]) | set(lbl[-1, :]) | set(lbl[:, 0]) | set(lbl[:, -1])
+    edge.discard(0)
+    keep = np.zeros(nlab + 1, dtype=bool)
+    if edge:
+        keep[list(edge)] = True
+    return keep[lbl]
+
+
+def _border_ring_dark(data, fallback_dark, width=None):
+    """Sigma-clipped median sky from a ring hugging the real-data edge.
+
+    For a centred object the ring is galaxy-free, so it samples true sky even
+    when the object dominates a small-footprint cutout. Geometry-agnostic
+    (handles rotated/scaled frames with zero margins). Falls back to
+    fallback_dark (the whole-frame value) when the ring is degenerate.
+    """
+    from scipy import ndimage
+    h, w = data.shape
+    if width is None:
+        width = max(2, int(round(0.05 * min(h, w))))
+    width = max(1, int(width))
+
+    data_mask = (data != 0)
+    exterior = _border_exterior_mask(data == 0)
+    if np.any(exterior):
+        ring = ndimage.binary_dilation(exterior, iterations=width) & data_mask
+    else:
+        # Full frame (no no-data margin): use the outer W-px array-border band.
+        band = np.zeros((h, w), dtype=bool)
+        band[:width, :] = True
+        band[-width:, :] = True
+        band[:, :width] = True
+        band[:, -width:] = True
+        ring = band & data_mask
+
+    # ring is already restricted to data_mask (data != 0); keep negatives —
+    # background-subtracted / cross-survey float frames have near-zero or
+    # negative sky, and assuming positivity would bias dark upward.
+    vals = data[ring]
+    if vals.size < _BORDER_RING_MIN_PIX:
+        return fallback_dark
+    return float(background.sigma_clipped_median(vals))
+
+
+def _estimate_dark(data, bg_model, config):
+    """Per-frame scalar sky level used for gain normalization (Pass 1 and Pass 3).
+
+    Default: median of the whole-frame background model (unchanged behavior).
+    With --bg-border: sigma-clipped median of a thin border ring (galaxy-free
+    for a centred object), falling back to the whole-frame median if degenerate.
+    """
+    whole = float(np.median(bg_model))
+    if not config.get('bg_border'):
+        return whole
+    return _border_ring_dark(data, whole, config.get('bg_border_w'))
+
+
 # =========================================================================
 # Pass 0: Analyze frames
 # =========================================================================
@@ -501,7 +617,7 @@ def analyze_frames_starless(files, channel, config):
                 data, cell_size=config['cell_size'], clip_k=config['clip_k'],
                 poly_order=config['poly_order'], mask_center_d=config['mask_center_d'])
             bg_model = background.render_background(h, w, coeffs, terms)
-            d = float(np.median(bg_model))
+            d = _estimate_dark(data, bg_model, config)
             ns = measure_noise(data, bg_model)
             if need_fwhm:
                 fw = star_utils.estimate_fwhm(data)
@@ -658,7 +774,7 @@ def analyze_frames(files, channel, config):
     dbg(f"  bg_poly {fname0}: {time.time()-t1:.2f}s")
 
     bg_model0 = background.render_background(h, w, coeffs0, terms0)
-    dark0 = float(np.median(bg_model0))
+    dark0 = _estimate_dark(data0, bg_model0, config)
     noise0 = measure_noise(data0, bg_model0)
 
     t1 = time.time()
@@ -718,7 +834,7 @@ def analyze_frames(files, channel, config):
             mask_center_d=config['mask_center_d'])
 
         bg_model = background.render_background(h, w, coeffs, terms)
-        dark = float(np.median(bg_model))
+        dark = _estimate_dark(data, bg_model, config)
         noise = measure_noise(data, bg_model)
 
         net_flux = star_utils.measure_flux_at(
@@ -827,6 +943,27 @@ def compute_weights(frames, config):
         w_fwhm = np.ones(n)
 
     return w_snr * w_fwhm
+
+
+def apply_equalize(weights, config):
+    """Equalized weights for the FINAL weighted SUM only (pure multiplier).
+
+    --equalize K pulls each frame's SUM weight toward equal. It is applied ONLY
+    to the final accumulation weight and MUST NOT influence the sigma-clip
+    reference or the deviation/RMS map -- those always use the optimal weights,
+    so the clip decision (fade) is identical to a default run. Weights are scaled
+    to mean 1, then Wnew = w*(1-K) + K: K=0 -> optimal weighting unchanged;
+    K=1 -> all frames equal. Returns the input unchanged when --equalize absent.
+    """
+    K = config.get('equalize')
+    if not K:            # absent (None) or K==0 -> no equalization
+        return weights
+    n = len(weights)
+    mean_w = float(np.mean(weights))
+    w_norm = weights / mean_w if mean_w > 0 else np.ones(n)
+    log(f"  Equalize: K={K:g} -> final-sum weights only "
+        f"(clip / RMS use optimal weights, unaffected); spread x{1.0 - K:g}")
+    return w_norm * (1.0 - K) + K
 
 
 # =========================================================================
@@ -1069,13 +1206,17 @@ def stack_channel(files, channel, config):
 
     log(f"  Threads: max {config['threads']} (adaptive by RAM)")
 
-    # Compute weights
+    # Weights. `weights` (optimal SNR/FWHM) drives the sigma-clip reference and
+    # the deviation/RMS map. `weights_sum` (optionally equalized) drives ONLY the
+    # final weighted accumulation, so --equalize never touches the clip decision
+    # or the RMS. Without --equalize the two are identical.
     weights = compute_weights(frames, config)
+    weights_sum = apply_equalize(weights, config)
 
-    # Log weight distribution
-    w_sorted = np.sort(weights)[::-1]
-    wsum = np.sum(weights)
-    log(f"  Weights: min={w_sorted[-1]:.4f}, median={np.median(weights):.4f}, "
+    # Log weight distribution (weights that set each frame's output contribution)
+    w_sorted = np.sort(weights_sum)[::-1]
+    wsum = np.sum(weights_sum)
+    log(f"  Weights: min={w_sorted[-1]:.4f}, median={np.median(weights_sum):.4f}, "
         f"max={w_sorted[0]:.4f}")
     # Top contributors
     cumw = np.cumsum(w_sorted) / wsum * 100
@@ -1085,45 +1226,53 @@ def stack_channel(files, channel, config):
 
     # Debug: per-frame weight table
     if _debug_enabled:
-        sorted_by_weight = np.argsort(weights)[::-1]
+        sorted_by_weight = np.argsort(weights_sum)[::-1]
         dbg("  Per-frame weights (sorted):")
         for rank, idx in enumerate(sorted_by_weight):
             f = frames[idx]
-            dbg(f"    #{rank+1:3d} w={weights[idx]:10.4f}  SNR={f['snr']:7.1f}  "
+            dbg(f"    #{rank+1:3d} w={weights_sum[idx]:10.4f}  SNR={f['snr']:7.1f}  "
                 f"FWHM={f['fwhm']:5.2f}  dark={f['dark']:7.1f}  "
                 f"light={f['light']:9.1f}  noise={f['noise']:6.3f}  "
                 f"{os.path.basename(files[idx])}")
 
-    # Pass 1: Weighted average
-    with Timer("Pass 1: Weighted average"):
-        avg = weighted_average(files, channel, ref, frames, weights, config)
-
     if not config['use_sigma']:
-        # No sigma clipping: plain weighted average is the result
+        # No sigma clipping: plain weighted sum (uses the equalized weights)
+        with Timer("Pass 1: Weighted average"):
+            avg = weighted_average(files, channel, ref, frames, weights_sum, config)
         elapsed = time.time() - t0
         log(f"\n[stack] Channel done in {elapsed:.1f}s (no sigma clipping)")
         return avg
 
-    # Iterative sigma clipping
-    old_dev = None
-    result = None
+    # Sigma clipping: the reference and deviation/RMS ALWAYS use the optimal
+    # weights, so the clip decision is independent of --equalize.
+    with Timer("Pass 1: Weighted average (clip reference)"):
+        avg = weighted_average(files, channel, ref, frames, weights, config)
 
+    old_dev = None
     for iteration in range(config['iterations']):
         log(f"\n[iteration {iteration+1}/{config['iterations']}]")
 
-        # Pass 2: Deviation map
+        # Pass 2: Deviation map (optimal weights)
         with Timer(f"Pass 2: Deviation map (iter {iteration+1})"):
             dev = compute_deviation(files, channel, ref, frames, weights, avg,
                                     bg_cache, config, old_dev=old_dev)
 
-        # Pass 3: Sigma clip
+        # Pass 3: Sigma clip (optimal weights -> robust reference for next iter)
         with Timer(f"Pass 3: Sigma-clip (iter {iteration+1})"):
-            result = sigma_clip_stack(files, channel, ref, frames, weights, avg,
-                                      dev, bg_cache, config)
-
-        # Update for next iteration
-        avg = result
+            avg = sigma_clip_stack(files, channel, ref, frames, weights, avg,
+                                   dev, bg_cache, config)
         old_dev = dev
+
+    # Final accumulation with the equalized weights, reusing the robust fade
+    # computed above from the optimal reference/RMS (unaffected by --equalize).
+    # Without --equalize, weights_sum is weights, so this is skipped and the
+    # result is byte-identical to before.
+    if config.get('equalize'):        # K > 0 (None/0 -> optimal result unchanged)
+        with Timer("Pass 3: Final equalized accumulation"):
+            result = sigma_clip_stack(files, channel, ref, frames, weights_sum,
+                                      avg, old_dev, bg_cache, config)
+    else:
+        result = avg
 
     elapsed = time.time() - t0
     log(f"\n[stack] Channel done in {elapsed:.1f}s")
@@ -1161,6 +1310,8 @@ def main():
     if config['use_fwhm']:
         parts.append(f"FWHM(MTF K={config['fwhm_mtf_k']})")
     log(f"  weight: {' x '.join(parts) if parts else '1.0 (equal)'}")
+    if config.get('equalize') is not None:
+        log(f"  equalize: K={config['equalize']:g} (frame weights pulled toward equal)")
     log(f"  border={config['border']}")
     log(f"  bg: cell={config['cell_size']}, clip={config['clip_k']}, "
         f"poly={config['poly_order']}")
@@ -1228,7 +1379,10 @@ def main():
         w_parts.append('SNR^2')
     if config['use_fwhm']:
         w_parts.append(f'FWHM(K={config["fwhm_mtf_k"]})')
-    header['HISTORY'] = f'stack: weight={" x ".join(w_parts) if w_parts else "equal"}'
+    weight_desc = " x ".join(w_parts) if w_parts else "equal"
+    if config.get('equalize') is not None:
+        weight_desc += f', equalize K={config["equalize"]:g}'
+    header['HISTORY'] = f'stack: weight={weight_desc}'
 
     hdu = fits.PrimaryHDU(data=result_data, header=header)
     hdu.writeto(output_file, overwrite=True)
