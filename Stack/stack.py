@@ -942,27 +942,28 @@ def compute_weights(frames, config):
     else:
         w_fwhm = np.ones(n)
 
-    weights = w_snr * w_fwhm
+    return w_snr * w_fwhm
 
-    # --equalize K: pull every frame weight toward equal by fraction K. Raw
-    # weights are first scaled to mean 1 (so "1" is the neutral/equal value),
-    # then lerped: Wnew = w*(1-K) + K. K=0 -> unchanged optimal weighting
-    # (relative spread intact); K=1 -> all weights 1 (SNR/FWHM weighting off,
-    # every frame contributes equally). Per-frame normalization (dark/light) is
-    # independent of the weights. The clip passes do not read w_i directly
-    # (Pass 2 ignores it; Pass 3 applies w_i only AFTER the fade), but the
-    # weights DO affect clipping INDIRECTLY: the Pass 1 weighted average is the
-    # reference the deviation map / fade are built from. Intentional -- outliers
-    # should be measured against the same-weighting mean that is being summed.
+
+def apply_equalize(weights, config):
+    """Equalized weights for the FINAL weighted SUM only (pure multiplier).
+
+    --equalize K pulls each frame's SUM weight toward equal. It is applied ONLY
+    to the final accumulation weight and MUST NOT influence the sigma-clip
+    reference or the deviation/RMS map -- those always use the optimal weights,
+    so the clip decision (fade) is identical to a default run. Weights are scaled
+    to mean 1, then Wnew = w*(1-K) + K: K=0 -> optimal weighting unchanged;
+    K=1 -> all frames equal. Returns the input unchanged when --equalize absent.
+    """
     K = config.get('equalize')
-    if K is not None:
-        mean_w = float(np.mean(weights))
-        w_norm = weights / mean_w if mean_w > 0 else np.ones(n)
-        weights = w_norm * (1.0 - K) + K
-        log(f"  Equalize: K={K:g} (weight spread x{1.0 - K:g}; "
-            f"{'all frames equal' if K >= 1.0 else 'SNR/FWHM weighting reduced'})")
-
-    return weights
+    if not K:            # absent (None) or K==0 -> no equalization
+        return weights
+    n = len(weights)
+    mean_w = float(np.mean(weights))
+    w_norm = weights / mean_w if mean_w > 0 else np.ones(n)
+    log(f"  Equalize: K={K:g} -> final-sum weights only "
+        f"(clip / RMS use optimal weights, unaffected); spread x{1.0 - K:g}")
+    return w_norm * (1.0 - K) + K
 
 
 # =========================================================================
@@ -1205,13 +1206,17 @@ def stack_channel(files, channel, config):
 
     log(f"  Threads: max {config['threads']} (adaptive by RAM)")
 
-    # Compute weights
+    # Weights. `weights` (optimal SNR/FWHM) drives the sigma-clip reference and
+    # the deviation/RMS map. `weights_sum` (optionally equalized) drives ONLY the
+    # final weighted accumulation, so --equalize never touches the clip decision
+    # or the RMS. Without --equalize the two are identical.
     weights = compute_weights(frames, config)
+    weights_sum = apply_equalize(weights, config)
 
-    # Log weight distribution
-    w_sorted = np.sort(weights)[::-1]
-    wsum = np.sum(weights)
-    log(f"  Weights: min={w_sorted[-1]:.4f}, median={np.median(weights):.4f}, "
+    # Log weight distribution (weights that set each frame's output contribution)
+    w_sorted = np.sort(weights_sum)[::-1]
+    wsum = np.sum(weights_sum)
+    log(f"  Weights: min={w_sorted[-1]:.4f}, median={np.median(weights_sum):.4f}, "
         f"max={w_sorted[0]:.4f}")
     # Top contributors
     cumw = np.cumsum(w_sorted) / wsum * 100
@@ -1221,45 +1226,53 @@ def stack_channel(files, channel, config):
 
     # Debug: per-frame weight table
     if _debug_enabled:
-        sorted_by_weight = np.argsort(weights)[::-1]
+        sorted_by_weight = np.argsort(weights_sum)[::-1]
         dbg("  Per-frame weights (sorted):")
         for rank, idx in enumerate(sorted_by_weight):
             f = frames[idx]
-            dbg(f"    #{rank+1:3d} w={weights[idx]:10.4f}  SNR={f['snr']:7.1f}  "
+            dbg(f"    #{rank+1:3d} w={weights_sum[idx]:10.4f}  SNR={f['snr']:7.1f}  "
                 f"FWHM={f['fwhm']:5.2f}  dark={f['dark']:7.1f}  "
                 f"light={f['light']:9.1f}  noise={f['noise']:6.3f}  "
                 f"{os.path.basename(files[idx])}")
 
-    # Pass 1: Weighted average
-    with Timer("Pass 1: Weighted average"):
-        avg = weighted_average(files, channel, ref, frames, weights, config)
-
     if not config['use_sigma']:
-        # No sigma clipping: plain weighted average is the result
+        # No sigma clipping: plain weighted sum (uses the equalized weights)
+        with Timer("Pass 1: Weighted average"):
+            avg = weighted_average(files, channel, ref, frames, weights_sum, config)
         elapsed = time.time() - t0
         log(f"\n[stack] Channel done in {elapsed:.1f}s (no sigma clipping)")
         return avg
 
-    # Iterative sigma clipping
-    old_dev = None
-    result = None
+    # Sigma clipping: the reference and deviation/RMS ALWAYS use the optimal
+    # weights, so the clip decision is independent of --equalize.
+    with Timer("Pass 1: Weighted average (clip reference)"):
+        avg = weighted_average(files, channel, ref, frames, weights, config)
 
+    old_dev = None
     for iteration in range(config['iterations']):
         log(f"\n[iteration {iteration+1}/{config['iterations']}]")
 
-        # Pass 2: Deviation map
+        # Pass 2: Deviation map (optimal weights)
         with Timer(f"Pass 2: Deviation map (iter {iteration+1})"):
             dev = compute_deviation(files, channel, ref, frames, weights, avg,
                                     bg_cache, config, old_dev=old_dev)
 
-        # Pass 3: Sigma clip
+        # Pass 3: Sigma clip (optimal weights -> robust reference for next iter)
         with Timer(f"Pass 3: Sigma-clip (iter {iteration+1})"):
-            result = sigma_clip_stack(files, channel, ref, frames, weights, avg,
-                                      dev, bg_cache, config)
-
-        # Update for next iteration
-        avg = result
+            avg = sigma_clip_stack(files, channel, ref, frames, weights, avg,
+                                   dev, bg_cache, config)
         old_dev = dev
+
+    # Final accumulation with the equalized weights, reusing the robust fade
+    # computed above from the optimal reference/RMS (unaffected by --equalize).
+    # Without --equalize, weights_sum is weights, so this is skipped and the
+    # result is byte-identical to before.
+    if config.get('equalize'):        # K > 0 (None/0 -> optimal result unchanged)
+        with Timer("Pass 3: Final equalized accumulation"):
+            result = sigma_clip_stack(files, channel, ref, frames, weights_sum,
+                                      avg, old_dev, bg_cache, config)
+    else:
+        result = avg
 
     elapsed = time.time() - t0
     log(f"\n[stack] Channel done in {elapsed:.1f}s")
