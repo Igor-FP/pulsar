@@ -11,6 +11,8 @@ import sys
 import glob
 import shlex
 import subprocess
+import urllib.request
+import urllib.parse
 from typing import List, Tuple, Optional
 
 import numpy as np
@@ -219,6 +221,70 @@ def progress_bar(i: int, n: int, width: int = 40):
 
 
 # ---------------------- helpers: WCS hints ----------------------
+def sexagesimal_to_deg(sex, is_ra=True):
+    """Parse a sexagesimal angle to degrees. RA is read in hours (H M S -> deg
+    via x15); Dec in degrees. Accepts space / colon / 'h m s' / comma separators.
+    Returns None on failure. Sign is taken from the string (so '-00 30 00' works)."""
+    s = str(sex).strip().lower()
+    neg = s.startswith("-")
+    s = s.replace("h", " ").replace("m", " ").replace("s", " ")
+    s = s.replace(":", " ").replace(",", " ")
+    parts = s.split()
+    if len(parts) < 3:
+        return None
+    try:
+        a, b, c = abs(float(parts[0])), float(parts[1]), float(parts[2])
+    except Exception:
+        return None
+    val = a + b / 60.0 + c / 3600.0
+    if is_ra:
+        return val * 15.0
+    return -val if neg else val
+
+
+def _parse_angle_cli(val, is_ra):
+    """Parse an --ra/--dec CLI value: a bare decimal is DEGREES; otherwise a
+    sexagesimal string (RA in HOURS, Dec in degrees). Raises ValueError."""
+    s = str(val).strip()
+    try:
+        deg = float(s)           # plain decimal degrees
+    except ValueError:
+        deg = sexagesimal_to_deg(s, is_ra=is_ra)
+        if deg is None:
+            fmt = "HH MM SS" if is_ra else "[+-]DD MM SS"
+            raise ValueError(f"cannot parse {'RA' if is_ra else 'Dec'} value '{val}' "
+                             f"(use decimal degrees or sexagesimal '{fmt}')")
+    if not np.isfinite(deg):
+        raise ValueError(f"{'RA' if is_ra else 'Dec'} value '{val}' is not a finite number")
+    return deg
+
+
+_SESAME_URL = "https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV?"
+
+
+def resolve_name_sesame(name, timeout=20):
+    """Resolve an object name to (ra_deg, dec_deg) via CDS Sesame (SIMBAD / NED /
+    VizieR). Raises RuntimeError on failure.
+
+    Note: resolution follows the service's disambiguation -- e.g. 'Abell 35' is
+    the galaxy cluster ACO 35; the planetary nebula is 'PN A66 35'."""
+    url = _SESAME_URL + urllib.parse.quote(str(name).strip())
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        raise RuntimeError(f"Sesame lookup failed for '{name}': {e}")
+    for line in text.splitlines():
+        if line.startswith("%J "):
+            parts = line.split()
+            try:
+                return float(parts[1]), float(parts[2])
+            except (IndexError, ValueError):
+                break
+    raise RuntimeError(f"Sesame could not resolve name '{name}' "
+                       f"(try a more specific identifier, e.g. 'PN A66 35')")
+
+
 def parse_ra_dec_from_header(hdr) -> Tuple[Optional[float], Optional[float]]:
     """Try CRVAL, then RA/DEC in degrees, then OBJCTRA/OBJCTDEC sexagesimal."""
     if "CRVAL1" in hdr and "CRVAL2" in hdr:
@@ -234,24 +300,6 @@ def parse_ra_dec_from_header(hdr) -> Tuple[Optional[float], Optional[float]]:
             return float(ra), float(dec)
         except Exception:
             pass
-
-    def sexagesimal_to_deg(sex, is_ra=True):
-        s = str(sex).strip().lower()
-        s = s.replace("h", " ").replace("m", " ").replace("s", " ")
-        s = s.replace(":", " ").replace(",", " ")
-        parts = s.split()
-        if len(parts) < 3:
-            return None
-        try:
-            a, b, c = float(parts[0]), float(parts[1]), float(parts[2])
-        except Exception:
-            return None
-        if is_ra:
-            return (a + b / 60.0 + c / 3600.0) * 15.0
-        else:
-            sign = -1.0 if a < 0 else 1.0
-            a = abs(a)
-            return sign * (a + b / 60.0 + c / 3600.0)
 
     ra_s = hdr.get("OBJCTRA")
     dec_s = hdr.get("OBJCTDEC")
@@ -353,11 +401,22 @@ def run_solve_field(input_fits: str,
                     output_wcs: str,
                     tweak_order: int,
                     use_wsl: bool,
-                    verbose: bool) -> None:
+                    verbose: bool,
+                    ra_override: Optional[float] = None,
+                    dec_override: Optional[float] = None,
+                    radius_override: Optional[float] = None,
+                    fovx: Optional[float] = None,
+                    fovy: Optional[float] = None,
+                    downsample: int = 1) -> None:
     """Call solve-field; write directly to output_wcs via --new-fits.
 
     For RGB input: extracts green channel to a temp mono file for solving,
     then restores full RGB data into the _wcs.fit output.
+
+    Optional hints override header-derived ones: ra/dec_override (deg) set the
+    search centre; fovx/fovy (deg) give the field of view, from which the pixel
+    scale is computed; radius_override (deg) sets the search radius; downsample
+    is passed to solve-field's source extraction.
     """
     with fits.open(input_fits, memmap=False) as hdul:
         hdr = hdul[0].header
@@ -365,6 +424,7 @@ def run_solve_field(input_fits: str,
         orig_dtype = orig_data.dtype
 
     orig_data, is_rgb = _normalize_rgb_data(orig_data)
+    ny, nx = orig_data.shape[-2:]
 
     # For RGB: extract green channel to temp mono file for solve-field
     solve_input = input_fits
@@ -383,8 +443,31 @@ def run_solve_field(input_fits: str,
         solve_input = green_tmp
         print_if_verbose("RGB input: extracting G channel for solving", verbose)
 
-    ra_hint, dec_hint = parse_ra_dec_from_header(hdr)
-    scale, scale_low, scale_high = estimate_scale_from_header(hdr)
+    # Position hint: explicit CLI override, else derive from the header.
+    if ra_override is not None and dec_override is not None:
+        ra_hint, dec_hint = ra_override, dec_override
+    else:
+        ra_hint, dec_hint = parse_ra_dec_from_header(hdr)
+
+    # Scale hint: from a user-supplied field of view (deg), else from the header.
+    if fovx is not None or fovy is not None:
+        if fovx is not None and nx:
+            scale = float(fovx) * 3600.0 / float(nx)
+        elif fovy is not None and ny:
+            scale = float(fovy) * 3600.0 / float(ny)
+        else:
+            scale = None
+        if scale and scale > 0:
+            # Generous +-25% window: a FOV given by hand is only approximate.
+            scale_low, scale_high = scale * 0.75, scale * 1.25
+            print_if_verbose(f"FOV hint -> pixel scale {scale:.4f} arcsec/pix", verbose)
+        else:
+            scale = scale_low = scale_high = None
+    else:
+        scale, scale_low, scale_high = estimate_scale_from_header(hdr)
+
+    # Search radius: explicit override, else sized from the (possibly FOV-derived) scale.
+    radius = radius_override if radius_override is not None else estimate_radius_from_header(hdr, scale)
 
     if use_wsl:
         input_cmd = win_to_wsl_path(solve_input)
@@ -399,16 +482,15 @@ def run_solve_field(input_fits: str,
         "--overwrite",
         "--new-fits", output_cmd,
         "--tweak-order", str(tweak_order),
-        "--downsample", "1",
+        "--downsample", str(int(downsample)),
     ]
     if scale_low and scale_high:
         solve_args += ["--scale-low", f"{scale_low}", "--scale-high", f"{scale_high}", "--scale-units", "arcsecperpix"]
     if ra_hint is not None and dec_hint is not None:
-        # Position hint no longer requires a known scale: estimate_radius_from_header
+        # A position hint does not require a known scale: estimate_radius_from_header
         # falls back to a wide cone (_NOSCALE_RADIUS_DEG) when scale is absent, so a
-        # header with RA/DEC but no FOCALLEN still constrains (and speeds up) the
-        # solve while tolerating imprecise coordinates.
-        solve_args += ["--ra", f"{ra_hint}", "--dec", f"{dec_hint}", "--radius", f"{estimate_radius_from_header(hdr, scale)}"]
+        # centre from --ra/--dec/--name (or the header) still constrains the search.
+        solve_args += ["--ra", f"{ra_hint}", "--dec", f"{dec_hint}", "--radius", f"{radius}"]
     solve_args.append(input_cmd)
 
     if use_wsl:
@@ -425,7 +507,10 @@ def run_solve_field(input_fits: str,
     if res.returncode != 0:
         raise RuntimeError("solve-field failed")
     if not os.path.exists(output_wcs):
-        raise FileNotFoundError(f"Expected WCS FITS not found: {output_wcs}")
+        raise RuntimeError(
+            "solve-field did not find a solution (no WCS written). Narrow the search "
+            "with --fovx/--fovy (scale) and --name or --ra/--dec (position), and/or use "
+            "--downsample 2 on large frames.")
 
     # For RGB: replace green-only data in _wcs.fit with full RGB,
     # keeping the solved WCS header
@@ -447,19 +532,16 @@ def run_solve_field(input_fits: str,
 
 
 def cleanup_astrometry_side_products(input_fits: str, verbose: bool):
-    """Remove side products emitted by astrometry.net for this input base."""
+    """Remove side products emitted by astrometry.net for this input base.
+
+    For RGB input, solve-field runs on the extracted green temp, so its side
+    products carry the '<base>_green_tmp' base -- clean that base too.
+    """
     try:
         base = os.path.splitext(input_fits)[0]
-        extras = [
-            f"{base}-indx.xyls",
-            f"{base}.corr",
-            f"{base}.wcs",
-            f"{base}.rdls",
-            f"{base}.match",
-            f"{base}.solved",
-            f"{base}.axy",
-            f"{base}_green_tmp.fit",
-        ]
+        exts = ["-indx.xyls", ".corr", ".wcs", ".rdls", ".match", ".solved", ".axy"]
+        extras = [b + e for b in (base, base + "_green_tmp") for e in exts]
+        extras.append(f"{base}_green_tmp.fit")
         for f in extras:
             if os.path.exists(f):
                 os.remove(f)
@@ -1160,7 +1242,8 @@ def main():
     )
     parser.add_argument("input", help="Input spec: file | numbered pattern | wildcard mask (FITS or JPEG)")
     parser.add_argument("output", nargs="?", default=None,
-                        help="Optional output pattern (AstroBatch style). If omitted, outputs go near inputs.")
+                        help="Optional output. If given, the solved result takes this EXACT name; "
+                             "if omitted, outputs go near the inputs with a _wcs (and _rect) suffix.")
 
     parser.add_argument("-r", "--rectify", action="store_true",
                         help="Produce <base>_rect.fit (reprojection). If omitted, only <base>_wcs.fit is created.")
@@ -1185,6 +1268,28 @@ def main():
                         help="SIP polynomial degree for WCS refit (1=affine). Default: 2 (currently only affine used).")
 
     parser.add_argument("--tweak-order", type=int, default=3, help="SIP polynomial order for solve-field.")
+
+    # Solve hints (useful for header-less inputs such as processed JPEGs).
+    parser.add_argument("--fovx", type=float, metavar="DEG",
+                        help="Field-of-view WIDTH in degrees; the pixel scale is computed from it "
+                             "(alternative to reading FOCALLEN from the header). Use --fovx OR --fovy.")
+    parser.add_argument("--fovy", type=float, metavar="DEG",
+                        help="Field-of-view HEIGHT in degrees (alternative to --fovx).")
+    parser.add_argument("--ra", metavar="RA",
+                        help="Search-centre RA. Decimal = DEGREES (e.g. 193.39); sexagesimal = HOURS "
+                             "(e.g. \"12 53 32\" = 193.39 deg). Requires --dec.")
+    parser.add_argument("--dec", metavar="DEC",
+                        help="Search-centre Dec in DEGREES: decimal (e.g. -22.87) or sexagesimal "
+                             "(e.g. \"-22 52 23\"). Requires --ra.")
+    parser.add_argument("--name", metavar="ID",
+                        help="Resolve the search centre from an object name via CDS Sesame/SIMBAD "
+                             "(e.g. --name \"PN A66 35\"). Explicit --ra/--dec take precedence. Note: "
+                             "\"Abell 35\" is the galaxy cluster; the planetary nebula is \"PN A66 35\".")
+    parser.add_argument("--radius", type=float, metavar="DEG",
+                        help="Search radius in degrees around the centre hint (default: from FOV, else wide).")
+    parser.add_argument("--downsample", type=int, default=1, metavar="N",
+                        help="solve-field source-extraction downsampling (default 1). 2-4 speeds up large frames.")
+
     parser.add_argument("--jpeg", type=int, nargs="?", const=99, default=99, metavar="Q",
                         help="JPEG output quality 1-100 (default 99). Applies when the input is a "
                              "JPEG: output is <base>_wcs.jpg (and <base>_rect.jpg with -r) with the "
@@ -1198,6 +1303,33 @@ def main():
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Resolve a one-time centre hint from the CLI (applies to every frame).
+    cli_ra = cli_dec = None
+    if (args.ra is not None) or (args.dec is not None):
+        if (args.ra is None) or (args.dec is None):
+            print("Error: --ra and --dec must be given together.", file=sys.stderr)
+            sys.exit(1)
+        try:
+            cli_ra = _parse_angle_cli(args.ra, is_ra=True)
+            cli_dec = _parse_angle_cli(args.dec, is_ra=False)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif args.name:
+        try:
+            cli_ra, cli_dec = resolve_name_sesame(args.name)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Resolved '{args.name}' -> RA {cli_ra:.5f}, Dec {cli_dec:+.5f} (deg)", file=sys.stderr)
+
+    for fov_name, fov_val in (("--fovx", args.fovx), ("--fovy", args.fovy)):
+        if fov_val is not None and not (np.isfinite(fov_val) and fov_val > 0):
+            print(f"Error: {fov_name} must be a positive number of degrees.", file=sys.stderr)
+            sys.exit(1)
+    if args.fovx is not None and args.fovy is not None:
+        print("Note: both --fovx and --fovy given; using --fovx.", file=sys.stderr)
 
     use_wsl = is_windows()
     n = len(io_pairs)
@@ -1226,14 +1358,28 @@ def main():
         progress_bar(idx - 1, n)
         temp_solve_fits = None
         output_wcs = None
+        solve_input = None
         try:
-            base_out_noext, _ = os.path.splitext(os.path.abspath(outbase))
-            output_wcs = base_out_noext + "_wcs.fit"
-            output_rect = base_out_noext + "_rect.fit"
+            abs_out = os.path.abspath(outbase)
+            base_out_noext, _ = os.path.splitext(abs_out)
+            infile_is_jpeg = _is_jpeg(infile)
+
+            # The _wcs/_rect suffix is only appended when the output name is
+            # auto-derived. With an explicit output, its exact name goes to the
+            # primary product (rectified if -r, else the solved image); the other
+            # / intermediate files keep derived names.
+            explicit_out = args.output is not None
+            if explicit_out and (not infile_is_jpeg) and (not args.rectify):
+                output_wcs = abs_out                      # FITS deliverable = exact name
+            else:
+                output_wcs = base_out_noext + "_wcs.fit"
+            if explicit_out and (not infile_is_jpeg) and args.rectify:
+                output_rect = abs_out                     # rectified FITS = exact name
+            else:
+                output_rect = base_out_noext + "_rect.fit"
 
             # JPEG input: decode to a temp FITS (carrying recovered hints) and
             # solve that; the output is converted back to JPEG below.
-            infile_is_jpeg = _is_jpeg(infile)
             solve_input = infile
             if infile_is_jpeg:
                 temp_solve_fits = base_out_noext + "_solvetmp.fit"
@@ -1245,7 +1391,13 @@ def main():
                 output_wcs=output_wcs,
                 tweak_order=args.tweak_order,
                 use_wsl=use_wsl,
-                verbose=args.verbose
+                verbose=args.verbose,
+                ra_override=cli_ra,
+                dec_override=cli_dec,
+                radius_override=args.radius,
+                fovx=args.fovx,
+                fovy=args.fovy,
+                downsample=args.downsample,
             )
 
             if args.refit_wcs:
@@ -1300,11 +1452,17 @@ def main():
             # after fine-align (which edits _rect.fit in place).
             if infile_is_jpeg:
                 q = max(1, min(100, args.jpeg))
-                fits_to_jpeg(output_wcs, base_out_noext + "_wcs.jpg", q)
+                if args.rectify:
+                    # Primary = rectified jpg (exact name if explicit); the solved
+                    # jpg is a secondary byproduct with a derived name.
+                    wcs_jpg = base_out_noext + "_wcs.jpg"
+                    rect_jpg = abs_out if explicit_out else base_out_noext + "_rect.jpg"
+                    jpeg_rect_tasks.append((output_rect, rect_jpg, q))
+                else:
+                    wcs_jpg = abs_out if explicit_out else base_out_noext + "_wcs.jpg"
+                fits_to_jpeg(output_wcs, wcs_jpg, q)
                 _safe_remove(output_wcs)
                 _safe_remove(temp_solve_fits)
-                if args.rectify:
-                    jpeg_rect_tasks.append((output_rect, base_out_noext + "_rect.jpg", q))
 
             ok += 1
             progress_bar(idx, n)
@@ -1312,10 +1470,11 @@ def main():
 
         except Exception as e:
             fail += 1
-            # JPEG input: don't leave _solvetmp.* side products or an orphan
-            # _wcs.fit behind when a later step (e.g. rectify) fails.
+            # Don't leave astrometry side products behind when a later step
+            # (e.g. rectify) fails; for JPEG input also drop the temp + orphan _wcs.fit.
+            if solve_input:
+                cleanup_astrometry_side_products(solve_input, verbose=args.verbose)
             if temp_solve_fits is not None:
-                cleanup_astrometry_side_products(temp_solve_fits, verbose=args.verbose)
                 _safe_remove(output_wcs)
                 _safe_remove(temp_solve_fits)
             progress_bar(idx, n)
