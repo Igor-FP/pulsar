@@ -33,6 +33,13 @@ try:
 except Exception:
     _have_scipy = False
 
+# ---- optional Pillow (JPEG input/output) ----
+_have_pil = True
+try:
+    from PIL import Image
+except Exception:
+    _have_pil = False
+
 # ---- import batch_utils from ../lib ----
 HERE = os.path.abspath(os.path.dirname(__file__))
 LIBDIR = os.path.abspath(os.path.join(HERE, "..", "lib"))
@@ -43,6 +50,15 @@ try:
 except Exception as e:
     print(f"Failed to import batch_utils from {LIBDIR}: {e}", file=sys.stderr)
     sys.exit(1)
+
+# FITS-header <-> JPEG codec (shared with fits2tiff; single source of truth for
+# the on-disk format, so a JPEG solved here reads back identically elsewhere).
+try:
+    from image_fits_header import (fits_header_to_json, json_to_fits_header,
+                                   embed_header_in_jpeg, read_fits_header_from_jpeg)
+    _have_jpeg_codec = True
+except Exception:
+    _have_jpeg_codec = False
 
 
 # ---------------------- RGB support ----------------------
@@ -61,6 +77,114 @@ def _normalize_rgb_data(data):
         if data.shape[2] == 3:
             return np.transpose(data, (2, 0, 1)), True
     return data, False
+
+
+# ---------------------- JPEG input/output (solve round-trip) ----------------------
+# autosolve can take JPEGs (e.g. produced by fits2tiff) and return JPEGs with the
+# solved WCS packed into a COM marker, via the shared lib/image_fits_header codec.
+
+# WCS/SIP keyword prefixes stripped from a recovered header before re-solving, so
+# the output JPEG carries only the fresh WCS produced by solve-field.
+_WCS_STRIP_PREFIXES = (
+    "WCSAXES", "CRVAL", "CRPIX", "CDELT", "CD", "PC", "CTYPE", "CUNIT",
+    "CROTA", "PV", "PS", "A_", "B_", "AP_", "BP_", "LONPOLE", "LATPOLE",
+    "RADESYS", "EQUINOX",
+)
+
+
+def _is_jpeg(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in (".jpg", ".jpeg")
+
+
+def _safe_remove(path):
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _clean_recovered_header(hdr):
+    """Strip WCS/SIP from a JPEG-recovered header so the solved output carries a
+    fresh WCS only. Preserve the field center as an RA/DEC hint when the source
+    had only a prior WCS (CRVAL) and no explicit RA/DEC."""
+    if hdr is None:
+        return None
+    if ("RA" not in hdr) and ("CRVAL1" in hdr):
+        try:
+            hdr["RA"] = float(hdr["CRVAL1"])
+        except Exception:
+            pass
+    if ("DEC" not in hdr) and ("CRVAL2" in hdr):
+        try:
+            hdr["DEC"] = float(hdr["CRVAL2"])
+        except Exception:
+            pass
+    for key in list(hdr.keys()):
+        if not key:
+            continue
+        ku = str(key).upper()
+        if any(ku.startswith(p) for p in _WCS_STRIP_PREFIXES):
+            try:
+                del hdr[key]
+            except Exception:
+                pass
+    return hdr
+
+
+def jpeg_to_temp_fits(jpeg_path: str, temp_fits_path: str) -> None:
+    """Decode a JPEG into a temporary FITS for solving. Recovers any embedded
+    FITS header (structural + WCS stripped) so acquisition hints (FOCALLEN,
+    RA/DEC) guide the solve. Mono 'L' -> (ny,nx); colour -> (3,ny,nx)."""
+    if not _have_pil:
+        raise RuntimeError("Pillow is required for JPEG input (pip install Pillow)")
+    with Image.open(jpeg_path) as img:
+        if img.mode == "L":
+            arr = np.array(img, dtype=np.uint8)
+        else:
+            arr = np.transpose(np.array(img.convert("RGB"), dtype=np.uint8), (2, 0, 1))
+
+    hdr = None
+    if _have_jpeg_codec:
+        try:
+            hdr_dict = read_fits_header_from_jpeg(jpeg_path)
+            if hdr_dict:
+                hdr = _clean_recovered_header(json_to_fits_header(hdr_dict))
+        except Exception:
+            hdr = None
+
+    fits.PrimaryHDU(data=arr, header=hdr).writeto(temp_fits_path, overwrite=True)
+
+
+def fits_to_jpeg(fits_path: str, jpeg_path: str, quality: int) -> None:
+    """Write a solved FITS (mono or RGB) to JPEG, embedding its header (WCS
+    included) in a COM marker. Pixel values are treated as 8-bit display data
+    (the input JPEG was 8-bit); non-uint8 arrays are clipped to [0,255]."""
+    if not _have_pil:
+        raise RuntimeError("Pillow is required for JPEG output (pip install Pillow)")
+    with fits.open(fits_path, memmap=False) as hdul:
+        data = hdul[0].data
+        header = hdul[0].header.copy()
+    if data is None:
+        raise ValueError(f"'{fits_path}' has no image data to write as JPEG.")
+
+    data, is_rgb = _normalize_rgb_data(data)
+    work = np.asarray(data)
+    if work.dtype != np.uint8:
+        work = np.nan_to_num(work.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+        work = np.clip(np.rint(work), 0, 255).astype(np.uint8)
+
+    if is_rgb:
+        img = Image.fromarray(np.transpose(work, (1, 2, 0)))   # (3,ny,nx)->(ny,nx,3)
+    else:
+        img = Image.fromarray(work)
+
+    out_dir = os.path.dirname(jpeg_path)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    img.save(jpeg_path, "JPEG", quality=int(quality))
+    if _have_jpeg_codec:
+        embed_header_in_jpeg(jpeg_path, fits_header_to_json(header))
 
 
 # ---------------------- helpers: OS / paths ----------------------
@@ -160,17 +284,25 @@ def estimate_scale_from_header(hdr):
     return scale, scale * 0.8, scale * 1.2
 
 
+# Search-cone radius (deg) used when the field centre is known but the pixel
+# scale is not (no FOCALLEN/pixel size, so no FOV to size the cone from). Wide
+# enough that slightly imprecise header coordinates still fall inside it, yet far
+# tighter than a blind all-sky search.
+_NOSCALE_RADIUS_DEG = 12.0
+
+
 def estimate_radius_from_header(hdr, scale_arcsec):
-    """Search radius (deg) from image size and scale, with sane lower bound."""
+    """Search radius (deg) from image size and scale. Falls back to a wide cone
+    (_NOSCALE_RADIUS_DEG) when the scale or image size is unknown."""
     nx = hdr.get("NAXIS1")
     ny = hdr.get("NAXIS2")
     if not nx or not ny or not scale_arcsec:
-        return 5.0
+        return _NOSCALE_RADIUS_DEG
     try:
         nx = int(nx)
         ny = int(ny)
     except Exception:
-        return 5.0
+        return _NOSCALE_RADIUS_DEG
     fov_x = nx * scale_arcsec / 3600.0
     fov_y = ny * scale_arcsec / 3600.0
     r = max(fov_x, fov_y) * 0.75
@@ -271,7 +403,11 @@ def run_solve_field(input_fits: str,
     ]
     if scale_low and scale_high:
         solve_args += ["--scale-low", f"{scale_low}", "--scale-high", f"{scale_high}", "--scale-units", "arcsecperpix"]
-    if ra_hint is not None and dec_hint is not None and scale:
+    if ra_hint is not None and dec_hint is not None:
+        # Position hint no longer requires a known scale: estimate_radius_from_header
+        # falls back to a wide cone (_NOSCALE_RADIUS_DEG) when scale is absent, so a
+        # header with RA/DEC but no FOCALLEN still constrains (and speeds up) the
+        # solve while tolerating imprecise coordinates.
         solve_args += ["--ra", f"{ra_hint}", "--dec", f"{dec_hint}", "--radius", f"{estimate_radius_from_header(hdr, scale)}"]
     solve_args.append(input_cmd)
 
@@ -1018,9 +1154,11 @@ def get_center_from_wcs(wcs_fit_path: str) -> Tuple[float, float]:
 # ---------------------- main batch driver ----------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Astrometric solve (WSL-aware) + optional WCS refit + optional rectification (+subpixel fine align). Batch-friendly."
+        description="Astrometric solve (WSL-aware) + optional WCS refit + optional rectification "
+                    "(+subpixel fine align). Batch-friendly. Accepts FITS or JPEG input; a JPEG "
+                    "input yields a JPEG output with the solved WCS packed into its header."
     )
-    parser.add_argument("input", help="Input spec: file | numbered pattern | wildcard mask")
+    parser.add_argument("input", help="Input spec: file | numbered pattern | wildcard mask (FITS or JPEG)")
     parser.add_argument("output", nargs="?", default=None,
                         help="Optional output pattern (AstroBatch style). If omitted, outputs go near inputs.")
 
@@ -1047,6 +1185,10 @@ def main():
                         help="SIP polynomial degree for WCS refit (1=affine). Default: 2 (currently only affine used).")
 
     parser.add_argument("--tweak-order", type=int, default=3, help="SIP polynomial order for solve-field.")
+    parser.add_argument("--jpeg", type=int, nargs="?", const=99, default=99, metavar="Q",
+                        help="JPEG output quality 1-100 (default 99). Applies when the input is a "
+                             "JPEG: output is <base>_wcs.jpg (and <base>_rect.jpg with -r) with the "
+                             "solved WCS packed into a COM marker (shared fits2tiff format).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output (show solver logs).")
 
     args = parser.parse_args()
@@ -1068,6 +1210,7 @@ def main():
     base_shape = None
     base_hdr_full = None
     rect_paths_for_fine = []
+    jpeg_rect_tasks = []   # (rect_fits, out_jpg, quality): converted after fine-align
 
     if args.rectify:
         if args.no_rotate:
@@ -1081,13 +1224,24 @@ def main():
 
     for idx, (infile, outbase) in enumerate(io_pairs, start=1):
         progress_bar(idx - 1, n)
+        temp_solve_fits = None
+        output_wcs = None
         try:
             base_out_noext, _ = os.path.splitext(os.path.abspath(outbase))
             output_wcs = base_out_noext + "_wcs.fit"
             output_rect = base_out_noext + "_rect.fit"
 
+            # JPEG input: decode to a temp FITS (carrying recovered hints) and
+            # solve that; the output is converted back to JPEG below.
+            infile_is_jpeg = _is_jpeg(infile)
+            solve_input = infile
+            if infile_is_jpeg:
+                temp_solve_fits = base_out_noext + "_solvetmp.fit"
+                jpeg_to_temp_fits(infile, temp_solve_fits)
+                solve_input = temp_solve_fits
+
             run_solve_field(
-                input_fits=infile,
+                input_fits=solve_input,
                 output_wcs=output_wcs,
                 tweak_order=args.tweak_order,
                 use_wsl=use_wsl,
@@ -1096,7 +1250,7 @@ def main():
 
             if args.refit_wcs:
                 applied = refit_wcs_from_corr(
-                    input_fits=infile,
+                    input_fits=solve_input,
                     wcs_fits=output_wcs,
                     sip_degree=args.refit_sip_degree,
                     verbose=args.verbose
@@ -1139,7 +1293,18 @@ def main():
                 )
                 rect_paths_for_fine.append(output_rect)
 
-            cleanup_astrometry_side_products(infile, verbose=args.verbose)
+            cleanup_astrometry_side_products(solve_input, verbose=args.verbose)
+
+            # JPEG input -> JPEG output(s) with embedded WCS. The solve product
+            # (_wcs) is converted now; the rectified product is deferred until
+            # after fine-align (which edits _rect.fit in place).
+            if infile_is_jpeg:
+                q = max(1, min(100, args.jpeg))
+                fits_to_jpeg(output_wcs, base_out_noext + "_wcs.jpg", q)
+                _safe_remove(output_wcs)
+                _safe_remove(temp_solve_fits)
+                if args.rectify:
+                    jpeg_rect_tasks.append((output_rect, base_out_noext + "_rect.jpg", q))
 
             ok += 1
             progress_bar(idx, n)
@@ -1147,6 +1312,12 @@ def main():
 
         except Exception as e:
             fail += 1
+            # JPEG input: don't leave _solvetmp.* side products or an orphan
+            # _wcs.fit behind when a later step (e.g. rectify) fails.
+            if temp_solve_fits is not None:
+                cleanup_astrometry_side_products(temp_solve_fits, verbose=args.verbose)
+                _safe_remove(output_wcs)
+                _safe_remove(temp_solve_fits)
             progress_bar(idx, n)
             print(f" FAIL: {os.path.basename(infile)}  [{e}]" + (' ' * 30), file=sys.stderr)
 
@@ -1156,6 +1327,14 @@ def main():
         else:
             print_if_verbose("Starting fine alignment (phase correlation + cubic spline shift)...", args.verbose)
             fine_align_inplace(rect_paths_for_fine, verbose=args.verbose)
+
+    # JPEG rectified outputs: convert after fine-align has finished editing _rect.fit.
+    for (rect_fits, out_jpg, q) in jpeg_rect_tasks:
+        try:
+            fits_to_jpeg(rect_fits, out_jpg, q)
+            _safe_remove(rect_fits)
+        except Exception as e:
+            print(f"Warning: JPEG rectified output failed for {os.path.basename(rect_fits)}: {e}", file=sys.stderr)
 
     progress_bar(n, n)
     print("", file=sys.stderr)
