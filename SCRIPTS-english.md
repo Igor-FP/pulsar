@@ -854,7 +854,9 @@ Key: a decimal `--ra` is **degrees** (not hours!), a sexagesimal `--ra` is **hou
 
 About `--name`: names resolve per SIMBAD's rules. Mind ambiguous names — `"Abell 35"` is the galaxy cluster; the planetary nebula is `"PN A66 35"`.
 
-*Radius* — `--radius 5` (degrees; default from FOV, else wide). *Downsampling* — `--downsample 2` (2–4 speeds up large frames; was hardcoded to 1). *Check indexes*: `wsl bash -lc "ls /usr/share/astrometry"` lists installed indexes; `-v` shows which ones solve-field tries.
+*Radius* — `--radius 5` (degrees; default from FOV, else wide). *Downsampling* — `--downsample 2` (2–4 speeds up large frames; was hardcoded to 1).
+
+*Index coverage*: before solving, autosolve **checks** whether any installed index suits the frame scale and, if none does, prints a warning telling which index scales to download (and from where). Manually: `wsl bash -lc "ls /usr/share/astrometry"` lists installed indexes; `-v` shows which ones solve-field tries.
 
 **Output name**: if an output is given, the solved result takes that **exact** name (no suffix added); if omitted, files are written next to the inputs with a `_wcs` (and `_rect` with `--rectify`) suffix.
 
