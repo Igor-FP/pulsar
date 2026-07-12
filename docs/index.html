@@ -849,6 +849,11 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
                         <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
                         <div class="param"><span class="param-name">--jpeg [Q]</span><span class="param-desc">качество JPEG-выхода 1–100 (по умолчанию 99); действует при JPEG-входе</span></div>
+                        <div class="param"><span class="param-name">--fovx / --fovy D</span><span class="param-desc">поле зрения по ширине / высоте в градусах; из него считается масштаб (одно из)</span></div>
+                        <div class="param"><span class="param-name">--ra / --dec V</span><span class="param-desc">центр поиска: десятичные градусы или шестидесятеричные (RA в часах)</span></div>
+                        <div class="param"><span class="param-name">--name "ID"</span><span class="param-desc">центр по имени объекта через SIMBAD/Sesame</span></div>
+                        <div class="param"><span class="param-name">--radius D</span><span class="param-desc">радиус конуса поиска (градусы)</span></div>
+                        <div class="param"><span class="param-name">--downsample N</span><span class="param-desc">прореживание при детекции звёзд (по умолчанию 1; 2–4 ускоряют)</span></div>
                     </div>
 
                     <h4>Репроекция (--rectify)</h4>
@@ -857,11 +862,18 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                     <h4>JPEG вход/выход</h4>
                     <p>Если на вход подан JPEG, autosolve декодирует его, решает и записывает результат обратно в JPEG с решённым WCS, упакованным в COM-маркер (тот же формат, что пишет fits2tiff). Выход: <code>&lt;base&gt;_wcs.jpg</code> (и <code>&lt;base&gt;_rect.jpg</code> при <code>--rectify</code>). Если во входном JPEG уже есть встроенный FITS-заголовок (например, экспортированный из fits2tiff), из него восстанавливаются подсказки <code>FOCALLEN</code>/<code>RA</code>/<code>DEC</code> — решение идёт быстрее. Требует Pillow. JPEG-вход всегда даёт JPEG-выход. Заголовок с координатами ускоряет решение даже без <code>FOCALLEN</code>: поиск ограничивается конусом вокруг координат, а не идёт по всему небу.</p>
 
+                    <h4>Подсказки для решения (масштаб, позиция)</h4>
+                    <p>Обработанный JPEG обычно не несёт заголовка с <code>FOCALLEN</code>/координатами, поэтому solve-field уходит в долгий слепой перебор. Подсказки резко ускоряют (и часто вообще делают возможным) решение.</p>
+                    <p><strong>Масштаб</strong> — через поле зрения в <strong>градусах</strong> (<code>--fovx</code> ширина, <code>--fovy</code> высота; достаточно одного; окно ±25 %). FOV должен быть достаточно точным: грубая ошибка (напр. 28° вместо реальных 41°) выведет масштаб за окно, и решение не найдётся (50 мм на full-frame → ~40° по ширине).</p>
+                    <p><strong>Позиция</strong> — три записи (эквивалентны): <code>--ra 193.39 --dec -22.87</code> (десятичные <strong>градусы</strong>); <code>--ra "12 53 32" --dec "-22 52 23"</code> (шестидесятеричные: RA в <strong>часах</strong>, разделитель пробел или двоеточие); <code>--name "PN A66 35"</code> (по имени через SIMBAD). Десятичное <code>--ra</code> — градусы, шестидесятеричное — часы. <code>--ra/--dec</code> приоритетнее <code>--name</code>. Внимание к неоднозначным именам: <code>"Abell 35"</code> — скопление галактик, планетарка — <code>"PN A66 35"</code>.</p>
+                    <p><strong>Имя выходного файла</strong>: если output задан — результат получает ровно это имя; если опущен — рядом со входом с суффиксом <code>_wcs</code> (и <code>_rect</code> при <code>--rectify</code>). Проверить индексы: <code>wsl bash -lc "ls /usr/share/astrometry"</code>.</p>
+
                     <h4>Примеры</h4>
                     <pre><code>autosolve light0001.fit solved0001.fit
-autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
 autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
-autosolve *.jpg --jpeg 95            # решить JPEG-и, вернуть JPEG с WCS в заголовке</code></pre>
+autosolve *.jpg --jpeg 95            # решить JPEG-и, вернуть JPEG с WCS в заголовке
+# Безголовый JPEG с подсказками имени и поля зрения:
+autosolve helix.jpg helix_wcs.jpg --name "NGC 7293" --fovy 0.5 --downsample 2 --jpeg 99</code></pre>
                 </div>
             </section>
 

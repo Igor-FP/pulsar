@@ -819,6 +819,11 @@ autosolve.py [options] input_spec output_spec
 - `--radius` — search radius (degrees)
 - `--no-rotate` — rectify without derotation — corrects distortion while preserving field rotation. No size change, no black borders. For mosaics and surveys.
 - `--jpeg [Q]` — JPEG output quality 1–100 (default 99); applies when the input is a JPEG
+- `--fovx D` / `--fovy D` — field of view width / height in **degrees**; the pixel scale is computed from it (give one)
+- `--ra V` / `--dec V` — search centre: decimal **degrees** or sexagesimal (RA in **hours**)
+- `--name "ID"` — search centre from an object name via SIMBAD/Sesame
+- `--radius D` — search-cone radius (degrees)
+- `--downsample N` — source-extraction downsampling (default 1; 2–4 speeds up large frames)
 
 **Reprojection (--rectify)**:
 Transforms image to gnomonic (TAN) projection — projection onto a plane tangent to the celestial sphere. By default center is taken from first file; can be set explicitly via `--rect-center-ra` and `--rect-center-dec`.
@@ -828,12 +833,38 @@ When the input is a JPEG, autosolve decodes it, solves, and writes the result ba
 
 A header with coordinates (`RA`/`DEC` or `OBJCTRA`/`OBJCTDEC`) speeds up the solve even without `FOCALLEN`: the search is constrained to a cone around those coordinates (a wide one when the scale is unknown) instead of an all-sky search.
 
+**Solve hints (scale and position)**:
+A processed JPEG usually carries no header with `FOCALLEN`/coordinates, so solve-field falls back to a slow blind search over the whole sky and all scales. Hints make the solve fast (and often possible at all).
+
+*Scale* — via the field of view in **degrees** (`--fovx` = width, `--fovy` = height; give one). The pixel scale (arcsec/px) is computed from the frame size, with a ±25 % window for estimation error:
+```bash
+--fovx 1.1     # 1.1-deg-wide field (= 66')
+--fovy 0.5     # 0.5-deg-tall field (= 30')
+```
+The FOV must be **reasonably accurate** (±25 % window): a gross error (e.g. 28° for a true 41° field) pushes the real scale outside the window and the solve fails. Rule of thumb: 50 mm on full-frame → ~40° wide.
+
+*Position* — three notations (all equivalent for Abell 35):
+```bash
+--ra 193.39 --dec -22.87            # decimal DEGREES
+--ra "12 53 32" --dec "-22 52 23"   # sexagesimal: RA in HOURS, Dec in degrees
+--ra 12:53:32   --dec -22:52:23     # separator: space or colon
+--name "PN A66 35"                  # by object name via SIMBAD
+```
+Key: a decimal `--ra` is **degrees** (not hours!), a sexagesimal `--ra` is **hours**. `--ra/--dec` take precedence over `--name`.
+
+About `--name`: names resolve per SIMBAD's rules. Mind ambiguous names — `"Abell 35"` is the galaxy cluster; the planetary nebula is `"PN A66 35"`.
+
+*Radius* — `--radius 5` (degrees; default from FOV, else wide). *Downsampling* — `--downsample 2` (2–4 speeds up large frames; was hardcoded to 1). *Check indexes*: `wsl bash -lc "ls /usr/share/astrometry"` lists installed indexes; `-v` shows which ones solve-field tries.
+
+**Output name**: if an output is given, the solved result takes that **exact** name (no suffix added); if omitted, files are written next to the inputs with a `_wcs` (and `_rect` with `--rectify`) suffix.
+
 **Examples**:
 ```bash
 autosolve light0001.fit solved0001.fit
-autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
 autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
 autosolve *.jpg --jpeg 95            # solve JPEGs, return JPEGs with WCS in the header
+# Header-less JPEG with name + field-of-view hints:
+autosolve helix.jpg helix_wcs.jpg --name "NGC 7293" --fovy 0.5 --downsample 2 --jpeg 99
 ```
 
 **Installing astrometry.net (Windows, via WSL)**:
