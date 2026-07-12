@@ -357,6 +357,79 @@ def estimate_radius_from_header(hdr, scale_arcsec):
     return max(r, 1.0)
 
 
+# ---------------------- astrometry index coverage ----------------------
+# Approximate quad-size range (arcmin) for each astrometry.net index "scale"
+# number (the last two digits of index-41NN / index-42NN / index-52NN /
+# index-tycho2-NN). solve-field matches quads ~10-100% of the field, so a field
+# is solvable only if some installed index's quad range overlaps that band.
+_INDEX_SCALE_ARCMIN = {
+    0: (2.0, 2.8), 1: (2.8, 4.0), 2: (4.0, 5.6), 3: (5.6, 8.0),
+    4: (8.0, 11.0), 5: (11.0, 16.0), 6: (16.0, 22.0), 7: (22.0, 30.0),
+    8: (30.0, 42.0), 9: (42.0, 60.0), 10: (60.0, 85.0), 11: (85.0, 120.0),
+    12: (120.0, 170.0), 13: (170.0, 240.0), 14: (240.0, 340.0), 15: (340.0, 480.0),
+    16: (480.0, 680.0), 17: (680.0, 1000.0), 18: (1000.0, 1400.0), 19: (1400.0, 2000.0),
+}
+
+# Common astrometry.net index directories. Listed with a plain `ls` (no shell
+# globs / metacharacters, which do not survive `wsl bash -lc` from a Windows
+# subprocess); index filenames are filtered in Python.
+_INDEX_DIRS = [
+    "/usr/share/astrometry", "/usr/local/astrometry/data",
+    "/usr/share/data/astrometry", "/opt/astrometry/data",
+]
+
+_installed_index_scales = None   # cache: set of scale numbers (None = not queried)
+_index_coverage_warned = False
+
+
+def _list_installed_index_scales(use_wsl):
+    """Return the set of installed astrometry index scale numbers (cached).
+    Empty set if none could be enumerated (then coverage is left unchecked)."""
+    global _installed_index_scales
+    if _installed_index_scales is not None:
+        return _installed_index_scales
+    listing = "ls -1 " + " ".join(_INDEX_DIRS)   # missing dirs -> stderr (ignored)
+    cmd = (["wsl", "bash", "-lc", listing] if use_wsl else ["bash", "-lc", listing])
+    scales = set()
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, timeout=30)
+        for line in res.stdout.splitlines():
+            m = re.search(r'index-(?:tycho2-|\d{2})(\d{2})', line)
+            if m:
+                scales.add(int(m.group(1)))
+    except Exception:
+        scales = set()
+    _installed_index_scales = scales
+    return scales
+
+
+def check_index_coverage(scale_arcsec, nx, ny, use_wsl, verbose):
+    """Warn (once, non-blocking) if no installed index suits the field scale."""
+    global _index_coverage_warned
+    if _index_coverage_warned or not scale_arcsec or not nx:
+        return
+    installed = _list_installed_index_scales(use_wsl)
+    if not installed:
+        return  # could not enumerate indexes -> don't guess
+    field_arcmin = max(int(nx), int(ny)) * float(scale_arcsec) / 60.0
+    lo_need, hi_need = 0.1 * field_arcmin, field_arcmin
+    useful = {k for k, (lo, hi) in _INDEX_SCALE_ARCMIN.items()
+              if hi >= lo_need and lo <= hi_need}
+    if not useful or (installed & useful):
+        return  # a suitable index is present (or field is outside the whole table)
+    _index_coverage_warned = True
+    missing = sorted(useful)
+    print(
+        f"WARNING: no installed astrometry index suits a field of ~{field_arcmin:.0f}' "
+        f"(~{field_arcmin / 60.0:.1f} deg) -- solve-field will likely fail. Need index "
+        f"scale(s) {missing[0]}-{missing[-1]} (e.g. index-42{missing[0]:02d}..index-42"
+        f"{missing[-1]:02d}, or index-52NN). Get them from http://data.astrometry.net/ "
+        f"(or apt: astrometry-data-2mass / astrometry-data-tycho2) into an index path such "
+        f"as /usr/share/astrometry. Installed scales: {sorted(installed)}.",
+        file=sys.stderr)
+
+
 # ---------------------- scale / FOV helpers ----------------------
 def _write_scale_fov(wcs_fit_path, verbose):
     """Compute and write pixel scale and FOV into the solved WCS header."""
@@ -468,6 +541,9 @@ def run_solve_field(input_fits: str,
 
     # Search radius: explicit override, else sized from the (possibly FOV-derived) scale.
     radius = radius_override if radius_override is not None else estimate_radius_from_header(hdr, scale)
+
+    # Preflight: warn if the installed indexes don't cover this field scale.
+    check_index_coverage(scale, nx, ny, use_wsl, verbose)
 
     if use_wsl:
         input_cmd = win_to_wsl_path(solve_input)
