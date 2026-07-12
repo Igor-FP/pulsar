@@ -73,7 +73,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | ngain.py | Normalize by gain (multiply to target median) |
 | noffset.py | Normalize by offset (add to target median) |
 | autoflat.py | Background field flattening (cell-based and min-binning modes) |
-| autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support) |
+| autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support, JPEG in→out with embedded WCS) |
 | cosme.py | Hot pixel correction |
 | makedark.py | Meta-script: create master darks + cosme lists |
 | makeflat.py | Meta-script: create master flats per filter |
@@ -97,7 +97,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py), sep (staralign, bestof, rgbbalance)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance)
 
 ## Running Tools
 
@@ -315,6 +315,21 @@ python "%SCRIPTTMP%" %*
 | `sigma_clipped_median()` | Iterative sigma-clipped median (ignores zeros) |
 
 **Used by**: autoflat.py (mode 1), stack.py (per-frame background for sigma comparison), mtf.py (autoblack detection)
+
+### Image Header Codec Module
+
+`lib/image_fits_header.py` embeds/recovers a FITS header inside 8-bit image containers (single source of truth for the on-disk format, so a header written by one tool reads back identically in another):
+
+| Function | Purpose |
+|----------|---------|
+| `fits_header_to_json()` | Serialize a FITS header to a JSON string (COMMENT/HISTORY preserved) |
+| `json_to_fits_header()` | Inverse: rebuild a FITS header from the JSON (structural keys stripped) |
+| `embed_header_in_jpeg()` | Inject the JSON into a JPEG COM marker (0xFFFE, right after SOI) |
+| `read_fits_header_from_jpeg()` | Extract the header dict back from a JPEG COM marker |
+
+**Format**: JSON object in a JPEG COM marker; PNG stores the same JSON string in a `fits_header` text chunk.
+
+**Used by**: fits2tiff.py (FITS → JPEG/PNG, writes the header), autosolve.py (JPEG solve round-trip: recovers acquisition hints on input, packs the solved WCS on output)
 
 ### Other Guidelines
 

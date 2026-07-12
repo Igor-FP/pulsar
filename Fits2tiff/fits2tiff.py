@@ -32,6 +32,12 @@ except ImportError:
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../lib")))
 import batch_utils
+# FITS-header <-> JPEG/PNG codec (shared, single source of truth for the format)
+from image_fits_header import (
+    fits_header_to_json as _fits_header_to_json,
+    embed_header_in_jpeg as _embed_header_in_jpeg,
+    read_fits_header_from_jpeg,
+)
 
 # Suppress numpy warnings from NaN operations
 warnings.filterwarnings('ignore', message='.*All-NaN slice.*', category=RuntimeWarning)
@@ -647,89 +653,9 @@ def _save_tiff_rgb32f(result, outfile):
 # File conversion
 # =========================================================================
 
-def _fits_header_to_json(header):
-    """Serialize FITS header to JSON-compatible dict."""
-    import json
-    result = {}
-    comments = []
-    history = []
-
-    for card in header.cards:
-        key = card.keyword
-        val = card.value
-        if key == 'COMMENT':
-            comments.append(str(val))
-        elif key == 'HISTORY':
-            history.append(str(val))
-        elif key == '' or key is None:
-            continue
-        else:
-            # Convert to JSON-safe type
-            if isinstance(val, (int, float, bool, str)):
-                result[key] = val
-            else:
-                result[key] = str(val)
-
-    if comments:
-        result['_COMMENT'] = comments
-    if history:
-        result['_HISTORY'] = history
-
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _embed_header_in_jpeg(jpeg_path, header_json_str):
-    """Inject FITS header as JPEG COM marker after SOI."""
-    import struct
-
-    header_bytes = header_json_str.encode('utf-8')
-
-    # Truncate if exceeds single COM marker limit (very unlikely)
-    if len(header_bytes) > 65533:
-        header_bytes = header_bytes[:65533]
-
-    com_len = len(header_bytes) + 2  # +2 for length field
-    com_marker = b'\xff\xfe' + struct.pack('>H', com_len) + header_bytes
-
-    with open(jpeg_path, 'rb') as f:
-        jpeg_data = f.read()
-
-    # Insert COM marker after SOI (FF D8)
-    with open(jpeg_path, 'wb') as f:
-        f.write(jpeg_data[:2])   # SOI
-        f.write(com_marker)      # COM with header
-        f.write(jpeg_data[2:])   # rest of JPEG
-
-
-def read_fits_header_from_jpeg(jpeg_path):
-    """Extract FITS header dict from JPEG COM marker. Returns dict or None."""
-    import struct, json
-
-    with open(jpeg_path, 'rb') as f:
-        data = f.read(min(os.path.getsize(jpeg_path), 131072))  # read first 128KB
-
-    pos = 2  # skip SOI (FF D8)
-    while pos < len(data) - 3:
-        if data[pos] != 0xFF:
-            break
-        marker = data[pos + 1]
-        if marker == 0xD9:  # EOI
-            break
-        if marker == 0xFE:  # COM
-            length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
-            comment = data[pos + 4:pos + 2 + length]
-            try:
-                return json.loads(comment.decode('utf-8'))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
-        # Skip to next marker
-        if marker in (0xD8, 0x00):
-            pos += 2
-        else:
-            length = struct.unpack('>H', data[pos + 2:pos + 4])[0]
-            pos += 2 + length
-
-    return None
+# FITS-header codec (_fits_header_to_json / _embed_header_in_jpeg /
+# read_fits_header_from_jpeg) now lives in lib/image_fits_header.py and is
+# imported at the top of this module.
 
 
 def _save_image(img, outfile, out_fmt, jpeg_quality, fits_header=None):
