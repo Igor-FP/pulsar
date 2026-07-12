@@ -28,7 +28,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **newflat.py** | Add entry to maintenance log (for autocalibrate --flatlog) |
 | **darkopt.py** | Optimized dark subtraction (K coefficient fitting) |
 | **sortfits.py** | FITS sorting by time, session splitting |
-| **autosolve.py** | Astrometric solving (WCS), reprojection, alignment |
+| **autosolve.py** | Astrometric solving (WCS), reprojection, alignment, JPEG input/output |
 | **fits2tiff.py** | Convert FITS to TIFF, JPEG, PNG |
 | **tiff2fits.py** | TIFF to FITS conversion (with header recovery) |
 | **raw2fits.py** | Camera RAW to FITS conversion (raw Bayer CFA, currently Canon CR2/CR3) |
@@ -800,6 +800,7 @@ sortfits *.fit sorted/ --auto --group-num
 - Subpixel alignment via FFT
 - WCS refit from .corr files
 - Supports RGB FITS input — solves on green channel, reprojects all three channels
+- Accepts FITS or JPEG input; a JPEG input yields a JPEG output with the solved WCS packed into its header
 
 **Syntax**:
 ```
@@ -817,15 +818,22 @@ autosolve.py [options] input_spec output_spec
 - `--scale-low`, `--scale-high` — scale range (arcsec/pixel)
 - `--radius` — search radius (degrees)
 - `--no-rotate` — rectify without derotation — corrects distortion while preserving field rotation. No size change, no black borders. For mosaics and surveys.
+- `--jpeg [Q]` — JPEG output quality 1–100 (default 99); applies when the input is a JPEG
 
 **Reprojection (--rectify)**:
 Transforms image to gnomonic (TAN) projection — projection onto a plane tangent to the celestial sphere. By default center is taken from first file; can be set explicitly via `--rect-center-ra` and `--rect-center-dec`.
+
+**JPEG input/output**:
+When the input is a JPEG, autosolve decodes it, solves, and writes the result back to a JPEG with the solved WCS packed into a COM marker (the same format fits2tiff writes). Output: `<base>_wcs.jpg` (and `<base>_rect.jpg` with `--rectify`). If the input JPEG already carries an embedded FITS header (e.g. exported by fits2tiff), acquisition hints `FOCALLEN`/`RA`/`DEC` are recovered from it so the solve runs faster. Requires Pillow. A JPEG input always yields a JPEG output (FITS output is not available for JPEG input).
+
+A header with coordinates (`RA`/`DEC` or `OBJCTRA`/`OBJCTDEC`) speeds up the solve even without `FOCALLEN`: the search is constrained to a cone around those coordinates (a wide one when the scale is unknown) instead of an all-sky search.
 
 **Examples**:
 ```bash
 autosolve light0001.fit solved0001.fit
 autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
 autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
+autosolve *.jpg --jpeg 95            # solve JPEGs, return JPEGs with WCS in the header
 ```
 
 **Installing astrometry.net (Windows, via WSL)**:
@@ -1270,7 +1278,7 @@ staralign *.fit out0001.fit
 - scipy (fft_align, autoflat, autosolve, staralign)
 - reproject (autosolve reprojection)
 - astrometry.net (autosolve solving)
-- Pillow (fits2tiff, tiff2fits)
+- Pillow (fits2tiff, tiff2fits, autosolve JPEG input/output)
 - rawpy (raw2fits)
 - exifread (raw2fits)
 - sep (bestof, rgbbalance --autostar, sub --continuum, staralign)

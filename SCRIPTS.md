@@ -28,7 +28,7 @@
 | **newflat.py** | Добавление записи в лог обслуживания (для autocalibrate --flatlog) |
 | **darkopt.py** | Вычитание мастердарка с оптимизацией (подбор коэффициента) |
 | **sortfits.py** | Сортировка FITS по времени, разбиение на сессии |
-| **autosolve.py** | Астрометрическое решение (WCS), ректификация, выравнивание |
+| **autosolve.py** | Астрометрическое решение (WCS), ректификация, выравнивание, JPEG вход/выход |
 | **fits2tiff.py** | Конвертация FITS в TIFF, JPEG, PNG |
 | **tiff2fits.py** | Конвертация TIFF → FITS |
 | **raw2fits.py** | Конвертация Camera RAW → FITS (пока только Canon CR2/CR3) |
@@ -809,6 +809,7 @@ sortfits *.fit sorted/ --auto --group-num
 - Субпиксельное выравнивание через FFT
 - Рефит WCS из .corr файлов
 - Поддерживает цветные RGB FITS — решение по зелёному каналу, репроекция всех трёх каналов
+- Принимает FITS или JPEG; для JPEG-входа выдаёт JPEG с решённым WCS, упакованным в заголовок
 
 **Синтаксис**:
 ```
@@ -826,15 +827,22 @@ autosolve.py [options] input_spec output_spec
 - `--scale-low`, `--scale-high` — диапазон масштаба (arcsec/pixel)
 - `--radius` — радиус поиска (градусы)
 - `--no-rotate` — ректификация без деротации — коррекция дисторсии с сохранением ориентации кадра. Размеры не меняются, нет чёрных полей. Для мозаик и обзоров.
+- `--jpeg [Q]` — качество JPEG-выхода 1–100 (по умолчанию 99); действует при JPEG-входе
 
 **Репроекция (--rectify)**:
 Преобразует изображение в гномоническую (TAN) проекцию — проекцию на плоскость, касательную к небесной сфере. По умолчанию центр берётся из первого файла; можно задать явно через `--rect-center-ra` и `--rect-center-dec`.
+
+**JPEG вход/выход**:
+Если на вход подан JPEG, autosolve декодирует его, решает и записывает результат обратно в JPEG с решённым WCS, упакованным в COM-маркер (тот же формат, что пишет fits2tiff). Выход: `<base>_wcs.jpg` (и `<base>_rect.jpg` при `--rectify`). Если во входном JPEG уже есть встроенный FITS-заголовок (например, экспортированный из fits2tiff), из него восстанавливаются подсказки `FOCALLEN`/`RA`/`DEC` — решение идёт быстрее. Требует Pillow. JPEG-вход всегда даёт JPEG-выход (FITS-выход для JPEG-входа недоступен).
+
+Заголовок с координатами (`RA`/`DEC` или `OBJCTRA`/`OBJCTDEC`) ускоряет решение даже без `FOCALLEN`: поиск ограничивается конусом вокруг координат (широким при неизвестном масштабе), а не идёт по всему небу.
 
 **Примеры**:
 ```batch
 autosolve light0001.fit solved0001.fit
 autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
 autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
+autosolve *.jpg --jpeg 95            # решить JPEG-и, вернуть JPEG с WCS в заголовке
 ```
 
 **Установка astrometry.net (Windows, через WSL)**:
@@ -1303,7 +1311,7 @@ staralign *.fit out0001.fit
 - scipy (fft_align, autoflat, autosolve, staralign)
 - reproject (autosolve ректификация)
 - astrometry.net (autosolve решение)
-- Pillow (fits2tiff, tiff2fits)
+- Pillow (fits2tiff, tiff2fits, autosolve JPEG вход/выход)
 - rawpy (raw2fits)
 - exifread (raw2fits)
 - sep (bestof, rgbbalance --autostar, sub --continuum, staralign)

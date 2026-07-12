@@ -145,7 +145,7 @@
                         <tr><td>newflat.py</td><td>Запись в лог обслуживания камеры</td></tr>
                         <tr><td>darkopt.py</td><td>Оптимизированное вычитание дарка</td></tr>
                         <tr><td>sortfits.py</td><td>Сортировка FITS по времени</td></tr>
-                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS, RGB)</td></tr>
+                        <tr><td>autosolve.py</td><td>Астрометрическое решение (WCS, RGB, JPEG вход/выход)</td></tr>
                         <tr><td>fft_align.py</td><td>FFT-выравнивание кадров</td></tr>
                         <tr><td>stack.py</td><td>Оптимальное взвешенное сложение с sigma-fade</td></tr>
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
@@ -172,7 +172,7 @@
 
                 <h4>Зависимости</h4>
                 <p><strong>Обязательные:</strong> Python 3.6+, numpy, astropy</p>
-                <p><strong>Дополнительные:</strong> scipy (fft_align, autoflat), reproject (autosolve), astrometry.net</p>
+                <p><strong>Дополнительные:</strong> scipy (fft_align, autoflat), reproject (autosolve), astrometry.net, Pillow (fits2tiff, autosolve JPEG вход/выход)</p>
 
                 <h4>Настройка</h4>
                 <p><strong>Windows:</strong> запустите <code>setup.bat</code> в корне проекта — он проверит Python, установит зависимости и добавит команды в PATH.</p>
@@ -829,7 +829,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
 
                 <div class="script-card">
                     <h3>autosolve.py <span class="badge">выравнивание</span></h3>
-                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL. Поддерживает цветные RGB FITS (3,H,W) — решение по зелёному каналу, репроекция всех трёх каналов.</p>
+                    <p>Астрометрическое решение (WCS), репроекция на касательную плоскость (TAN/гномоническая) и субпиксельное выравнивание. Использует astrometry.net через WSL. Поддерживает цветные RGB FITS (3,H,W) — решение по зелёному каналу, репроекция всех трёх каналов. Принимает FITS или JPEG: для JPEG-входа возвращает JPEG с решённым WCS, упакованным в заголовок.</p>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
@@ -848,15 +848,20 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
                         <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
+                        <div class="param"><span class="param-name">--jpeg [Q]</span><span class="param-desc">качество JPEG-выхода 1–100 (по умолчанию 99); действует при JPEG-входе</span></div>
                     </div>
 
                     <h4>Репроекция (--rectify)</h4>
                     <p>Преобразует изображение в гномоническую (TAN) проекцию — проекцию на плоскость, касательную к небесной сфере. По умолчанию центр берётся из первого файла; можно задать явно через <code>--rect-center-ra</code> и <code>--rect-center-dec</code>.</p>
 
+                    <h4>JPEG вход/выход</h4>
+                    <p>Если на вход подан JPEG, autosolve декодирует его, решает и записывает результат обратно в JPEG с решённым WCS, упакованным в COM-маркер (тот же формат, что пишет fits2tiff). Выход: <code>&lt;base&gt;_wcs.jpg</code> (и <code>&lt;base&gt;_rect.jpg</code> при <code>--rectify</code>). Если во входном JPEG уже есть встроенный FITS-заголовок (например, экспортированный из fits2tiff), из него восстанавливаются подсказки <code>FOCALLEN</code>/<code>RA</code>/<code>DEC</code> — решение идёт быстрее. Требует Pillow. JPEG-вход всегда даёт JPEG-выход. Заголовок с координатами ускоряет решение даже без <code>FOCALLEN</code>: поиск ограничивается конусом вокруг координат, а не идёт по всему небу.</p>
+
                     <h4>Примеры</h4>
                     <pre><code>autosolve light0001.fit solved0001.fit
 autosolve --rectify --align --ref ref.fit light0001.fit aligned0001.fit
-autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit</code></pre>
+autosolve --rectify --rect-center-ra 180.5 --rect-center-dec 45.2 *.fit out0001.fit
+autosolve *.jpg --jpeg 95            # решить JPEG-и, вернуть JPEG с WCS в заголовке</code></pre>
                 </div>
             </section>
 
