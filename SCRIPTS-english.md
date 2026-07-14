@@ -1216,22 +1216,25 @@ Automatically detects stars, matches them across frames, and aligns images with 
 
 **Dependencies**: scipy, sep
 
-**Two operating modes:**
+**Operating modes:**
 
-1. **Reference alignment** (with `--ref`) — aligns all target frames to a reference frame
-2. **Chromatic correction** (without `--ref`) — aligns R and B channels to G within each RGB file. Corrects atmospheric refraction and chromatic aberration
+1. **With `--ref`** — align all target frames to the given reference frame by stars.
+2. **Without `--ref`, several frames (default)** — align all frames to the **first** frame.
+3. **Without `--ref`, a single file or `--rgb`** — chromatic correction: align R and B channels to G within each file (atmospheric refraction + chromatic aberration).
 
 **Syntax**:
 ```
-staralign input_spec output_spec --ref reference.fit [options]
-staralign input_spec output_spec                     (chromatic mode)
+staralign input_spec output_spec [--ref reference.fit] [options]
+staralign *.fit out0001.fit                 (no --ref: align to the first frame)
+staralign color.fit corrected.fit           (single file: chromatic correction)
+staralign *.fit out0001.fit --rgb           (chromatic correction on each file)
 ```
 
 **Parameters**:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--ref FILE` | — | Reference frame (omit for chromatic mode) |
+| `--ref FILE` | first frame | Reference frame (omitted → defaults to the first input frame) |
 | `--model {tps\|projective}` | tps | Registration model |
 | `--smoothness F` | 0.25 | TPS smoothness (0 = exact interpolation) |
 | `--descriptors N` | 20 | Pentagons per star (5-50) |
@@ -1260,6 +1263,7 @@ staralign input_spec output_spec                     (chromatic mode)
 | `--threads N` | CPU-1 | Worker threads (forced to 1 in --debug mode) |
 | `--debug` | off | Detailed per-frame diagnostics and timing |
 | `--no-mirror` | off | Disable mirror fallback |
+| `--rgb` | off | Chromatic correction (R,B→G) within each input file, instead of aligning frames |
 
 **Auto-retry**: on matching failure, automatically retries with more stars: levels [N, 2N, 2.5N, 3N], capped by detected count. Disable with `--no-retry`.
 
@@ -1291,11 +1295,14 @@ staralign Ha_*.fit aligned0001.fit --ref R_ref.fit --max-stars 200
 # Multi-threaded
 staralign *.fit out0001.fit --ref ref.fit --threads 4
 
-# Chromatic correction in RGB file
+# No --ref: align all frames to the first
+staralign *.fit out0001.fit
+
+# Chromatic correction in a single RGB file
 staralign color.fit corrected.fit
 
-# Batch chromatic correction
-staralign *.fit out0001.fit
+# Batch chromatic correction (per-channel, each file)
+staralign *.fit out0001.fit --rgb
 ```
 
 ---
