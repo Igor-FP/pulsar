@@ -552,100 +552,87 @@ def _scale_channel(work, out_bits):
 
 
 # =========================================================================
-# Custom TIFF writers (Pillow can't handle 16-bit or 32-bit RGB)
+# TIFF writer (baseline, complete tags for maximum reader compatibility)
 # =========================================================================
 
-def _save_tiff_rgb16(result, outfile):
-    """Write 16-bit RGB TIFF manually."""
+def _save_tiff(data, outfile):
+    """Write an uncompressed baseline TIFF: mono (H,W) or RGB (H,W,3),
+    uint8 / uint16 / float32. Emits a complete tag set including SamplesPerPixel,
+    SampleFormat and X/YResolution.
+
+    Pillow omits SamplesPerPixel on mono TIFFs; strict readers (e.g. PixInsight)
+    then read a garbage sample count and crash with an access violation. Writing
+    it explicitly (verified to open in PixInsight) is why this replaces both PIL's
+    mono TIFF path and the earlier 16/32-bit RGB writers.
+    """
     import struct
 
-    h, w = result.shape[:2]
-    pixels = np.ascontiguousarray(result).tobytes()
-    pixel_bytes = len(pixels)
+    data = np.ascontiguousarray(data)
+    if data.ndim == 2:
+        h, w = data.shape
+        samples, photometric = 1, 1            # grayscale, BlackIsZero
+    elif data.ndim == 3 and data.shape[2] == 3:
+        h, w = data.shape[:2]
+        samples, photometric = 3, 2            # RGB
+    else:
+        raise ValueError(f"_save_tiff: unsupported shape {data.shape}")
+
+    if data.dtype == np.uint8:
+        bps, sfmt = 8, 1                        # unsigned int
+    elif data.dtype == np.uint16:
+        bps, sfmt = 16, 1
+    elif data.dtype == np.float32:
+        bps, sfmt = 32, 3                       # IEEE float
+    else:
+        raise ValueError(f"_save_tiff: unsupported dtype {data.dtype}")
+
+    pixels = data.tobytes()
+    n_tags = 14
+    ifd_off = 8
+    off = ifd_off + (2 + n_tags * 12 + 4)      # out-of-line data starts after IFD
+    if samples > 1:
+        bps_off = off;  off += samples * 2
+        sfmt_off = off; off += samples * 2
+    xres_off = off; off += 8
+    yres_off = off; off += 8
+    pixel_off = off
+
+    # Short values with count==1 are stored inline; arrays (RGB) go out-of-line.
+    bps_val = bps if samples == 1 else bps_off
+    sfmt_val = sfmt if samples == 1 else sfmt_off
 
     tags = [
-        (256, 4, 1, w),
-        (257, 4, 1, h),
-        (258, 3, 3, 0),
-        (259, 3, 1, 1),
-        (262, 3, 1, 2),
-        (273, 4, 1, 0),
-        (277, 3, 1, 3),
-        (278, 4, 1, h),
-        (279, 4, 1, pixel_bytes),
-        (284, 3, 1, 1),
+        (256, 4, 1, w),                 # ImageWidth
+        (257, 4, 1, h),                 # ImageLength
+        (258, 3, samples, bps_val),     # BitsPerSample
+        (259, 3, 1, 1),                 # Compression = none
+        (262, 3, 1, photometric),       # PhotometricInterpretation
+        (273, 4, 1, pixel_off),         # StripOffsets (single strip)
+        (277, 3, 1, samples),           # SamplesPerPixel
+        (278, 4, 1, h),                 # RowsPerStrip = full height
+        (279, 4, 1, len(pixels)),       # StripByteCounts
+        (282, 5, 1, xres_off),          # XResolution
+        (283, 5, 1, yres_off),          # YResolution
+        (284, 3, 1, 1),                 # PlanarConfiguration = chunky
+        (296, 3, 1, 2),                 # ResolutionUnit = inch
+        (339, 3, samples, sfmt_val),    # SampleFormat
     ]
-    n_tags = len(tags)
 
-    ifd_offset = 8
-    ifd_size = 2 + n_tags * 12 + 4
-    bps_offset = ifd_offset + ifd_size
-    data_offset = bps_offset + 6
-
-    fixed_tags = []
-    for tag, typ, cnt, val in tags:
-        if tag == 258:
-            val = bps_offset
-        elif tag == 273:
-            val = data_offset
-        fixed_tags.append((tag, typ, cnt, val))
+    out_dir = os.path.dirname(outfile)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
 
     buf = bytearray()
-    buf += struct.pack('<2sHI', b'II', 42, ifd_offset)
+    buf += struct.pack('<2sHI', b'II', 42, ifd_off)
     buf += struct.pack('<H', n_tags)
-    for tag, typ, cnt, val in fixed_tags:
-        buf += struct.pack('<HHII', tag, typ, cnt, val)
-    buf += struct.pack('<I', 0)
-    buf += struct.pack('<HHH', 16, 16, 16)
-    buf += pixels
-
-    with open(outfile, 'wb') as f:
-        f.write(buf)
-
-
-def _save_tiff_rgb32f(result, outfile):
-    """Write 32-bit float RGB TIFF manually."""
-    import struct
-
-    h, w = result.shape[:2]
-    pixels = np.ascontiguousarray(result.astype(np.float32)).tobytes()
-    pixel_bytes = len(pixels)
-
-    tags = [
-        (256, 4, 1, w),
-        (257, 4, 1, h),
-        (258, 3, 3, 0),
-        (259, 3, 1, 1),
-        (262, 3, 1, 2),
-        (273, 4, 1, 0),
-        (277, 3, 1, 3),
-        (278, 4, 1, h),
-        (279, 4, 1, pixel_bytes),
-        (284, 3, 1, 1),
-        (339, 3, 1, 3),
-    ]
-    n_tags = len(tags)
-
-    ifd_offset = 8
-    ifd_size = 2 + n_tags * 12 + 4
-    bps_offset = ifd_offset + ifd_size
-    data_offset = bps_offset + 6
-
-    fixed_tags = []
     for tag, typ, cnt, val in tags:
-        if tag == 258:
-            val = bps_offset
-        elif tag == 273:
-            val = data_offset
-        fixed_tags.append((tag, typ, cnt, val))
-
-    buf = bytearray()
-    buf += struct.pack('<2sHI', b'II', 42, ifd_offset)
-    buf += struct.pack('<H', n_tags)
-    for tag, typ, cnt, val in fixed_tags:
         buf += struct.pack('<HHII', tag, typ, cnt, val)
-    buf += struct.pack('<I', 0)
-    buf += struct.pack('<HHH', 32, 32, 32)
+    buf += struct.pack('<I', 0)                             # next IFD = 0
+    if samples > 1:
+        buf += struct.pack('<%dH' % samples, *([bps] * samples))
+        buf += struct.pack('<%dH' % samples, *([sfmt] * samples))
+    buf += struct.pack('<II', 72, 1)                        # XResolution 72/1
+    buf += struct.pack('<II', 72, 1)                        # YResolution 72/1
     buf += pixels
 
     with open(outfile, 'wb') as f:
@@ -740,19 +727,12 @@ def convert_file(infile, outfile, config):
         out_bits = bits if bits is not None else 8
         if out_fmt in ('jpeg', 'png'):
             out_bits = 8
-        stretched_is_rgb = stretched.ndim == 3
 
-        # PIL cannot write 16/32-bit RGB TIFF -> use the struct-based writers.
-        if stretched_is_rgb and out_fmt == 'tiff' and out_bits == 16:
-            _save_tiff_rgb16(_stretched_to_bits(stretched, 16), outfile)
-            return
-        if stretched_is_rgb and out_fmt == 'tiff' and out_bits == 32:
-            _save_tiff_rgb32f(_stretched_to_bits(stretched, 32), outfile)
-            return
-
-        result = _stretched_to_bits(stretched, out_bits)
-        img = Image.fromarray(result)
-        _save_image(img, outfile, out_fmt, jpeg_quality, fits_header)
+        result = _stretched_to_bits(stretched, out_bits)   # (H,W) or (H,W,3), u8/u16/f32
+        if out_fmt == 'tiff':
+            _save_tiff(result, outfile)
+        else:
+            _save_image(Image.fromarray(result), outfile, out_fmt, jpeg_quality, fits_header)
         return
 
     # Standard conversion (no stretch)
@@ -795,22 +775,15 @@ def convert_file(infile, outfile, config):
                     ch = np.zeros_like(ch)
                 result_channels.append(ch.astype(np.float32))
             result = np.stack(result_channels, axis=-1)
-
-        if out_bits == 16 and out_fmt == 'tiff':
-            _save_tiff_rgb16(result, outfile)
-            return
-        if out_bits == 32 and out_fmt == 'tiff':
-            _save_tiff_rgb32f(result, outfile)
-            return
-
-        img = Image.fromarray(result)
     else:
         work = data.astype(np.float64)
         work = np.nan_to_num(work, nan=0.0, posinf=0.0, neginf=0.0)
         result = _scale_channel(work, out_bits)
-        img = Image.fromarray(result)
 
-    _save_image(img, outfile, out_fmt, jpeg_quality, fits_header)
+    if out_fmt == 'tiff':
+        _save_tiff(result, outfile)
+    else:
+        _save_image(Image.fromarray(result), outfile, out_fmt, jpeg_quality, fits_header)
 
 
 # =========================================================================
