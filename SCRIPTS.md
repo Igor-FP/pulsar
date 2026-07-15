@@ -949,7 +949,7 @@ fits2tiff.py [--bits 8|16|32] [--format tiff|jpeg|png] [--stretch] [--keepcolor]
 - `--bits 32` — нормализация [min,max] → [0.0,1.0], float32
 - (без --bits) — авто: int8/uint8→8, int16/uint16→16, остальное→32
 - `--format F` — формат выхода: tiff, jpeg, png (по умолчанию по расширению)
-- `--stretch` — нелинейный авто stretch для экранного отображения
+- `--stretch` — нелинейный авто stretch для экранного отображения; уважает `--bits` для TIFF (16/32 = растянутый TIFF без бандинга), JPEG/PNG остаются 8-бит
 - `--keepcolor` — сохранение цвета при stretch
 - `--bin 2|4` — даунсэмплинг в 2 или 4 раза
 - `--jpeg Q` — качество JPEG (1-100)
@@ -970,6 +970,9 @@ fits2tiff --bits 8 light0001.fit preview0001.tif
 
 :: JPEG с авто stretch для превью
 fits2tiff --stretch --bin 2 *.fit *.jpg
+
+:: Растянутый 16-битный TIFF (без бандинга, для дальнейшего редактирования)
+fits2tiff sum_l.fit out_l.tif --stretch --bits 16
 
 :: Нумерованный выход
 fits2tiff --bits 16 *.fit out0001.tif
