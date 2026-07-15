@@ -64,7 +64,8 @@ def usage():
         "\n"
         "Auto stretch (screen transfer function):\n"
         "  --stretch [T]  Auto black/white + MTF to place median at T\n"
-        "                 (default T=0.1). Forces 8-bit output.\n"
+        "                 (default T=0.1). Honors --bits for TIFF (8/16/32,\n"
+        "                 16/32 preserve tonal precision); JPEG/PNG stay 8-bit.\n"
         "  --keepcolor [K]  Preserve color during stretch via luminance ratio\n"
         "                 (default K=1.0). K=1: full, K=0: per-channel.\n"
         "  --keepcolor-hsl [K]  Preserve color via HSL (apply MTF to L only).\n"
@@ -84,6 +85,7 @@ def usage():
         "  fits2tiff img.fit img.png --stretch 0.15 --keepcolor\n"
         "  fits2tiff *.fit *.jpg --stretch\n"
         "  fits2tiff img.fit img.tif --bits 16\n"
+        "  fits2tiff sum.fit out.tif --stretch --bits 16\n"
         "  fits2tiff img.fit img.jpg --format jpeg\n"
     )
     sys.exit(1)
@@ -403,7 +405,8 @@ def auto_stretch(data, target, keepcolor_k, keepcolor_hsl_k=None):
       neither:         per-channel MTF
 
     data: 2D (H,W) or 3D (3,H,W) float64 array.
-    Returns: uint8 array (H,W) or (H,W,3).
+    Returns: normalized float64 array in [0,1], shape (H,W) or (H,W,3).
+             The caller maps it to the requested bit depth.
     """
     is_rgb = data.ndim == 3 and data.shape[0] == 3
 
@@ -478,12 +481,12 @@ def auto_stretch(data, target, keepcolor_k, keepcolor_hsl_k=None):
             g_out = _apply_mtf(channels[1], k)
             b_out = _apply_mtf(channels[2], k)
 
-        # To uint8 H×W×3
+        # Normalized [0,1] H×W×3; bit-depth conversion is done by the caller.
         result = np.stack([
-            np.rint(np.clip(r_out * 255, 0, 255)).astype(np.uint8),
-            np.rint(np.clip(g_out * 255, 0, 255)).astype(np.uint8),
-            np.rint(np.clip(b_out * 255, 0, 255)).astype(np.uint8),
-        ], axis=-1)
+            np.clip(r_out, 0.0, 1.0),
+            np.clip(g_out, 0.0, 1.0),
+            np.clip(b_out, 0.0, 1.0),
+        ], axis=-1).astype(np.float64)
 
     else:
         # Mono
@@ -492,7 +495,7 @@ def auto_stretch(data, target, keepcolor_k, keepcolor_hsl_k=None):
         median_norm = float(np.median(med_valid)) if med_valid.size > 0 else 0.5
         k = _find_mtf_k(median_norm, target)
         stretched = _apply_mtf(norm, k)
-        result = np.rint(np.clip(stretched * 255, 0, 255)).astype(np.uint8)
+        result = np.clip(stretched, 0.0, 1.0)
 
     return result
 
@@ -680,6 +683,19 @@ def _save_image(img, outfile, out_fmt, jpeg_quality, fits_header=None):
         img.save(outfile, 'TIFF')
 
 
+def _stretched_to_bits(stretched, out_bits):
+    """Map a stretched [0,1] float array to the requested bit depth.
+
+    The stretch already normalized to [0,1], so this is a direct scale (no
+    min/max re-normalization): 8 -> uint8, 16 -> uint16, 32 -> float32 [0,1].
+    """
+    if out_bits == 16:
+        return np.rint(np.clip(stretched * 65535.0, 0, 65535)).astype(np.uint16)
+    if out_bits == 32:
+        return np.clip(stretched, 0.0, 1.0).astype(np.float32)
+    return np.rint(np.clip(stretched * 255.0, 0, 255)).astype(np.uint8)
+
+
 def convert_file(infile, outfile, config):
     """Convert a single FITS file to TIFF/JPEG/PNG."""
     bits = config['bits']
@@ -718,7 +734,23 @@ def convert_file(infile, outfile, config):
     if stretch_target is not None:
         work = data.astype(np.float64)
         work = np.nan_to_num(work, nan=0.0, posinf=0.0, neginf=0.0)
-        result = auto_stretch(work, stretch_target, keepcolor_k, keepcolor_hsl_k)
+        stretched = auto_stretch(work, stretch_target, keepcolor_k, keepcolor_hsl_k)  # float [0,1]
+
+        # Honor --bits for the stretched result too (default 8; JPEG/PNG are 8-bit only).
+        out_bits = bits if bits is not None else 8
+        if out_fmt in ('jpeg', 'png'):
+            out_bits = 8
+        stretched_is_rgb = stretched.ndim == 3
+
+        # PIL cannot write 16/32-bit RGB TIFF -> use the struct-based writers.
+        if stretched_is_rgb and out_fmt == 'tiff' and out_bits == 16:
+            _save_tiff_rgb16(_stretched_to_bits(stretched, 16), outfile)
+            return
+        if stretched_is_rgb and out_fmt == 'tiff' and out_bits == 32:
+            _save_tiff_rgb32f(_stretched_to_bits(stretched, 32), outfile)
+            return
+
+        result = _stretched_to_bits(stretched, out_bits)
         img = Image.fromarray(result)
         _save_image(img, outfile, out_fmt, jpeg_quality, fits_header)
         return
