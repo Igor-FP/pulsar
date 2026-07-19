@@ -62,10 +62,11 @@ def usage():
         "                    1. RGB balance by star photometry\n"
         "                    2. Background flattening per channel\n"
         "                    3. LRGB combination\n"
-        "  --slum          Build a super-luminance master before combining:\n"
+        "  --superlum      Build a super-luminance master before combining:\n"
         "                  inverse-variance (SNR^2) blend of L with the synthetic\n"
         "                  luminance R+G+B (scale-matched). Opt-in: without it L\n"
         "                  is used as-is (the input L may already be a super-lum).\n"
+        "                  Assumes RGB is already balanced (use --auto otherwise).\n"
         "  --dry-run       Measure and print the L:syn noise ratio and expected\n"
         "                  SNR gain, then exit without writing output.\n"
         "  --method M      Combination method: ratio (default) or hsl.\n"
@@ -100,7 +101,7 @@ def parse_args(argv):
 
     value_opts = {'--method', '--saturation', '--lightness', '--warmth',
                   '--eps', '--bg-desat'}
-    flag_set = {'--auto', '--slum', '--dry-run'}
+    flag_set = {'--auto', '--superlum', '--dry-run'}
     opts = {}
     flags = {}
     positional = []
@@ -195,7 +196,7 @@ def parse_args(argv):
         'saturation': saturation,
         'lightness': lightness,
         'auto': flags.get('--auto', False),
-        'slum': flags.get('--slum', False),
+        'superlum': flags.get('--superlum', False),
         'dry_run': flags.get('--dry-run', False),
         'mask_center_d': mask_center_d,
         'warmth': warmth,
@@ -365,7 +366,7 @@ def super_luminance(lum, rgb, bg_mask, verbose=True):
     S = sR * sR + sG * sG + sB * sB          # var(L_syn)
     if sL <= 0 or S <= 0:
         if verbose:
-            print("  [slum] degenerate noise estimate; using L as-is")
+            print("  [superlum] degenerate noise estimate; using L as-is")
         return lum.copy()
 
     inv_L, inv_S = 1.0 / (sL * sL), 1.0 / S
@@ -374,9 +375,9 @@ def super_luminance(lum, rgb, bg_mask, verbose=True):
     gain = np.sqrt(1.0 + (sL * sL) / S)
 
     if verbose:
-        print(f"  [slum] sigma (L_syn units): L={sL:.3g} R={sR:.3g} G={sG:.3g} "
+        print(f"  [superlum] sigma (L_syn units): L={sL:.3g} R={sR:.3g} G={sG:.3g} "
               f"B={sB:.3g} -> syn={np.sqrt(S):.3g}")
-        print(f"  [slum] weights: L={wL:.3f} syn={1.0 - wL:.3f}  |  "
+        print(f"  [superlum] weights: L={wL:.3f} syn={1.0 - wL:.3f}  |  "
               f"SNR gain over L-only = x{gain:.3f} (+{(gain - 1) * 100:.0f}%)")
     return I
 
@@ -606,7 +607,7 @@ def process(config):
 
     # Optional super-luminance (opt-in): max-SNR master luminance from L + (R+G+B).
     # Default is L as-is, since the input L may already be a super-luminance.
-    if config['slum'] or config['dry_run']:
+    if config['superlum'] or config['dry_run']:
         master = super_luminance(lum_data, rgb_data, ~zero_mask, verbose=True)
         if config['dry_run']:
             print("  [dry-run] super-luminance measured; no output written.")
@@ -652,7 +653,7 @@ def process(config):
     header['NAXIS3'] = 3
 
     parts = [f"method={method}"]
-    if config['slum']:
+    if config['superlum']:
         parts.append("super-luminance")
     if do_auto:
         parts.append("auto")

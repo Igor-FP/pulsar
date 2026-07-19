@@ -1623,7 +1623,7 @@ Replaces the brightness information in a color image with a higher-quality lumin
 - `ratio` (default) — `C_out = C × L_fit / (R+G+B + eps)`. Using `R+G+B` (not the perceptual `(R+2G+B)/4`) gives the identity `sum(C_out) = L_fit` and stays consistent with the super-luminance.
 - `hsl` — RGB→HSL, replace L (after LinearFit), HSL→RGB.
 
-**Super-luminance (`--slum`)**: optional max-SNR master luminance — inverse-variance (SNR²) blend of `L` and the synthetic luminance `R+G+B` (both scale-matched). Noise is measured from the background; the `SNR_L:SNR_syn` ratio and expected gain are printed. Off by default: `L` is used as-is (the input `L` may already be a super-luminance).
+**Super-luminance (`--superlum`)**: optional max-SNR master luminance — inverse-variance (SNR²) blend of `L` and the synthetic luminance `R+G+B` (both scale-matched). Noise is measured from the background; the `SNR_L:SNR_syn` ratio and expected gain are printed. Off by default: `L` is used as-is (the input `L` may already be a super-luminance). **Assumption**: RGB must already be balanced — otherwise the synthetic `R+G+B` luminance is skewed and the SNR weights biased; use `--auto` or pre-balance the channels first.
 
 **Syntax**:
 ```
@@ -1636,7 +1636,7 @@ lrgb.py L.fit RGB.fit output.fit [options]
 - `--saturation S` — saturation boost (default 1.0)
 - `--warmth W` — color temperature shift along Planck curve (-1..+1, default 0)
 - `--lightness K` — MTF on lightness (default 0.5 = identity)
-- `--slum` — build super-luminance (SNR² blend of `L` + `R+G+B`) before combining
+- `--superlum` — build super-luminance (SNR² blend of `L` + `R+G+B`) before combining
 - `--dry-run` — measure and print the `L:syn` noise ratio and expected SNR gain, then exit
 - `--eps E` — ratio denominator floor (default 0.002, normalized [0,1]); shadow numerical stability only
 - `--bg-desat K` — pull low-signal pixels toward neutral grey: colour kept for signal ≥ K·sigma above background, faded below (default 0 = off; typically 2–4). Cleans background colour noise
@@ -1647,8 +1647,8 @@ lrgb.py L.fit RGB.fit output.fit [options]
 ```bash
 lrgb L.fit R.fit G.fit B.fit result.fit
 lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
-lrgb L.fit R.fit G.fit B.fit result.fit --slum --bg-desat 3
-lrgb L.fit R.fit G.fit B.fit result.fit --slum --dry-run
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 lrgb --auto L.fit R.fit G.fit B.fit result.fit
 ```
 

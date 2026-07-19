@@ -1706,7 +1706,7 @@ stack obj_*.fit result.fit --sigma --bg-border
 - `ratio` (default) — `C_out = C × L_fit / (R+G+B + ε)`, сохраняет цветовые соотношения точнее. Знаменатель `R+G+B` (не перцептивный `(R+2G+B)/4`) даёт тождество `Σ C_out = L_fit` и согласован с super-luminance
 - `hsl` — RGB→HSL, замена L (после LinearFit), HSL→RGB
 
-**Super-luminance (`--slum`)**: опциональное построение мастер-яркости с максимальным SNR — инверсно-дисперсионная (SNR²) смесь `L` и синтетической яркости `R+G+B` (обе после подгонки шкал). Шум оценивается по фону, печатается отношение `SNR_L:SNR_syn` и ожидаемый выигрыш. По умолчанию **выключено**: `L` используется как есть (входной `L` уже может быть super-luminance).
+**Super-luminance (`--superlum`)**: опциональное построение мастер-яркости с максимальным SNR — инверсно-дисперсионная (SNR²) смесь `L` и синтетической яркости `R+G+B` (обе после подгонки шкал). Шум оценивается по фону, печатается отношение `SNR_L:SNR_syn` и ожидаемый выигрыш. По умолчанию **выключено**: `L` используется как есть (входной `L` уже может быть super-luminance). **Допущение**: RGB должен быть уже сбалансирован — иначе синтетическая яркость `R+G+B` перекошена и веса SNR смещаются; используйте `--auto` или пред-баланс каналов.
 
 **Синтаксис**:
 ```
@@ -1719,7 +1719,7 @@ lrgb.py L.fit RGB.fit output.fit [options]
 - `--saturation S` — boost насыщенности (default 1.0, L подавляет saturation)
 - `--warmth W` — сдвиг цветовой температуры вдоль кривой Планка (-1..+1, default 0)
 - `--lightness K` — MTF на lightness (default 0.5 = identity)
-- `--slum` — построить super-luminance (SNR²-смесь `L` + `R+G+B`) перед совмещением
+- `--superlum` — построить super-luminance (SNR²-смесь `L` + `R+G+B`) перед совмещением
 - `--dry-run` — измерить и напечатать отношение шумов `L:syn` и ожидаемый выигрыш SNR, без записи
 - `--eps E` — пол знаменателя ratio-метода (default 0.002, нормированные [0,1]); только численная стабильность в тенях
 - `--bg-desat K` — тянуть слабосигнальные пиксели к нейтральному серому: цвет сохраняется для сигнала ≥ K·σ над фоном, гаснет ниже (default 0 = выкл; типично 2–4). Каноническая чистка цветового шума фона
@@ -1738,10 +1738,10 @@ lrgb L.fit RGB.fit result.fit --method hsl
 lrgb L.fit R.fit G.fit B.fit result.fit --saturation 1.3
 
 :: Super-luminance (+SNR) с нейтрализацией фона
-lrgb L.fit R.fit G.fit B.fit result.fit --slum --bg-desat 3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
 
 :: Только измерить ожидаемый выигрыш SNR
-lrgb L.fit R.fit G.fit B.fit result.fit --slum --dry-run
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 
 :: Полный автоматический пайплайн
 lrgb --auto L.fit R.fit G.fit B.fit result.fit
