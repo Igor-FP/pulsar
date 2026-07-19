@@ -828,6 +828,10 @@ autosolve.py [options] input_spec output_spec
 **Reprojection (--rectify)**:
 Transforms image to gnomonic (TAN) projection — projection onto a plane tangent to the celestial sphere. By default center is taken from first file; can be set explicitly via `--rect-center-ra` and `--rect-center-dec`.
 
+- `--rect-method {wcsresample,interp,exact}` — resampling engine (default `wcsresample`; `interp` = bilinear, `exact` = highest fidelity).
+
+Out-of-footprint (no-data) pixels after rectification are always set to **0** (black = no-data): tile/overlay consumers rely on this for clean edge fades, and mosaic/stacking must exclude them via a coverage mask anyway. (Filling with the median would fabricate grey 'sky' where there is no data — fake content, avoided by policy.)
+
 **JPEG input/output**:
 When the input is a JPEG, autosolve decodes it, solves, and writes the result back to a JPEG with the solved WCS packed into a COM marker (the same format fits2tiff writes). Output: `<base>_wcs.jpg` (and `<base>_rect.jpg` with `--rectify`). If the input JPEG already carries an embedded FITS header (e.g. exported by fits2tiff), acquisition hints `FOCALLEN`/`RA`/`DEC` are recovered from it so the solve runs faster. Requires Pillow. A JPEG input always yields a JPEG output (FITS output is not available for JPEG input).
 

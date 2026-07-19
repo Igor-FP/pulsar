@@ -777,14 +777,19 @@ def merge_headers_preserve_wcs(rect_hdr, src_hdr):
 
 
 def _sanitize_2d(data_2d):
-    """Replace NaN/Inf with fill value in a 2D float32 array. Returns sanitized copy."""
+    """Replace NaN/Inf in a 2D float32 array with 0.0; return a sanitized copy.
+
+    Out-of-footprint (no-data) pixels from reprojection are set to 0 (black =
+    no-data): tile/overlay consumers rely on this for clean edge fades, and
+    mosaic/stacking must exclude them via a coverage mask anyway. Filling with
+    the image median would fabricate plausible grey 'sky' where there is no data
+    -- misleading fake content, avoided by policy."""
     data_2d = np.asarray(data_2d, dtype=np.float32)
     finite_mask = np.isfinite(data_2d)
     if not finite_mask.any():
         return None  # signal: all NaN
     if not finite_mask.all():
-        fill = float(np.median(data_2d[finite_mask]))
-        data_2d[~finite_mask] = fill
+        data_2d[~finite_mask] = 0.0
     return data_2d
 
 
@@ -848,6 +853,7 @@ def run_wcs_resample(wcs_fits: str,
     Supports both 2D (mono) and 3D (RGB) input in wcs_fits.
     For RGB: reprojects each channel separately, then stacks.
     If no_rotate: strips SIP distortion but preserves field rotation.
+    Out-of-footprint (no-data) pixels are set to 0 (black = no-data).
     """
     rect_wcs_hdr, (ny, nx) = build_rectified_wcs_header(
         wcs_fits, center_ra_dec=center_ra_dec, pixscale_arcsec=pixscale_arcsec,
@@ -960,6 +966,18 @@ def run_wcs_resample(wcs_fits: str,
 
         fits.PrimaryHDU(data=data_out,
                         header=rect_wcs_hdr).writeto(output_rect, overwrite=True)
+
+    # wcs-resample path: the external tool wrote output_rect directly, bypassing
+    # _sanitize_2d. Force any no-data (non-finite) pixels to 0 (black = no-data),
+    # matching the interp/exact path.
+    if rect_method == "wcsresample":
+        with fits.open(output_rect, mode="update", memmap=False) as h:
+            arr = h[0].data
+            if arr is not None:
+                bad = ~np.isfinite(arr)
+                if bad.any():
+                    arr[bad] = 0.0
+                    h.flush()
 
     # Merge non-WCS metadata from source into output
     with fits.open(wcs_fits) as src, fits.open(output_rect, mode="update") as dst:
@@ -1329,7 +1347,8 @@ def main():
     parser.add_argument("--rect-center-dec", type=float, help="Rectified center Dec (deg).")
     parser.add_argument("--rect-pixscale", type=float, help="Rectified pixel scale (arcsec/pix).")
     parser.add_argument("--rect-method", choices=["wcsresample", "interp", "exact"], default="wcsresample",
-                        help="Resampling engine: wcsresample (fast), interp (bilinear), exact (highest fidelity).")
+                        help="Resampling engine: wcsresample (fast), interp (bilinear), exact (highest fidelity). "
+                             "Out-of-footprint (no-data) pixels are always set to 0 (black = no-data).")
 
     parser.add_argument("--no-rotate", action="store_true",
                         help="Rectify without derotation: strip SIP distortion but preserve "
