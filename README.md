@@ -53,7 +53,7 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 
 ### Alignment
 - Star-based registration with geometric descriptor matching, RANSAC, and TPS
-- WCS astrometric solving and tangent-plane reprojection
+- WCS astrometric solving and tangent-plane reprojection (or reuse of an embedded/prior WCS to skip re-solving)
 - FFT-based alignment with rotation and scale search
 - Chromatic aberration correction (R/B channel alignment to G)
 
@@ -67,7 +67,8 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 - Nonlinear stretch (MTF) with auto black/white levels and multi-curve blending
 - Background field flattening with polynomial fitting
 - LRGB composition with automatic RGB balancing
-- Color preservation through HSL and luminance-ratio methods
+- Max-SNR super-luminance (inverse-variance blend of L with synthetic R+G+B)
+- Color preservation through HSL and luminance-ratio methods, with optional background desaturation
 - RGB color balance by star photometry
 - Bayer demosaicing, pixel binning, cropping
 

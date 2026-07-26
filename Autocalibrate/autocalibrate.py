@@ -218,6 +218,15 @@ def parse_args(argv):
     dark_path = args[2]
     flat_path = args[3]
 
+    if any(c in os.path.basename(out_spec) for c in "*?["):
+        print(f"ERROR: output '{out_spec}' contains a wildcard.")
+        print("       autocalibrate does NOT expand '*' in the output. It builds")
+        print("       descriptive names <base>_exp<EXPTIME>_<FILTER>_<N>.ext from a")
+        print("       FIXED base name. Give a base instead of a mask, e.g.:")
+        print(r"         autocalibrate L\*.fit  cal\L\out.fit  <dark> <flat>")
+        print(r"         -> cal\L\out_exp120_L_1.fit, cal\L\out_exp120_L_2.fit, ...")
+        sys.exit(1)
+
     if not os.path.isdir(dark_path):
         print(f"ERROR: dark_path is not a directory: {dark_path}")
         sys.exit(1)

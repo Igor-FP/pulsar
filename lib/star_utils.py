@@ -52,6 +52,15 @@ def _ensure_pixstack(sep):
         _pixstack_set = True
 
 
+# sep's default matched-filter convolution, combined with a per-pixel err map,
+# dominates sep.extract on dense/nebulous fields (measured ~5x: 85s -> 17s on a
+# 26 MP Sagittarius frame, same source count). The filter only helps pull the
+# faintest sources out of the noise; every consumer here (staralign, bestof,
+# rgbbalance, sub) ranks by flux and uses BRIGHT stars, so it is unnecessary.
+# Disable it for speed while keeping the accurate per-pixel err thresholding.
+_EXTRACT_FILTER_KERNEL = None
+
+
 def _is_pixstack_overflow(exc):
     """True if exc is sep's object-pixel-buffer ('pixstack') overflow."""
     msg = str(exc).lower()
@@ -359,7 +368,8 @@ def estimate_fwhm(data, snr=38.0, bw=64, bh=64):
     data_sub = data - bkg_image
 
     try:
-        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms,
+                              filter_kernel=_EXTRACT_FILTER_KERNEL)
     except Exception as exc:
         if _is_pixstack_overflow(exc):
             print("WARNING: sep pixel buffer overflow (large extended source); "
@@ -406,7 +416,8 @@ def detect_stars(data, snr=5.0, photometry=False, bw=64, bh=64):
     data_sub = data - bkg_image
 
     try:
-        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms)
+        catalog = sep.extract(data_sub, thresh=snr, err=bkg_rms,
+                              filter_kernel=_EXTRACT_FILTER_KERNEL)
     except Exception as exc:
         if _is_pixstack_overflow(exc):
             # A galaxy-/nebula-dominated frame is not a star field: degrade to

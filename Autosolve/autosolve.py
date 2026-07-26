@@ -158,6 +158,58 @@ def jpeg_to_temp_fits(jpeg_path: str, temp_fits_path: str) -> None:
     fits.PrimaryHDU(data=arr, header=hdr).writeto(temp_fits_path, overwrite=True)
 
 
+def _header_has_celestial_wcs(hdr) -> bool:
+    """True if a header carries a usable celestial WCS: RA/DEC-like CTYPE plus a
+    reference point (CRVAL) and a scale (CD / CDELT / PC)."""
+    if hdr is None:
+        return False
+    c1 = str(hdr.get("CTYPE1", "")).upper()
+    c2 = str(hdr.get("CTYPE2", "")).upper()
+    has_ctype = (("RA" in c1) or ("LON" in c1)) and (("DEC" in c2) or ("LAT" in c2))
+    has_crval = ("CRVAL1" in hdr) and ("CRVAL2" in hdr)
+    has_scale = any(k in hdr for k in ("CD1_1", "CDELT1", "PC1_1"))
+    return has_ctype and has_crval and has_scale
+
+
+def _read_source_wcs_header(infile: str, infile_is_jpeg: bool):
+    """--reuse-wcs: return a fits.Header carrying the input's ready WCS, or None
+    if it has no usable celestial WCS.
+
+    (A) JPEG: recover the PULSAR COM-marker header WITHOUT stripping the WCS.
+    (B) FITS: read the FITS header as-is (standard solver WCS, astropy-readable).
+    """
+    try:
+        if infile_is_jpeg:
+            if not _have_jpeg_codec:
+                return None
+            hdr_dict = read_fits_header_from_jpeg(infile)
+            if not hdr_dict:
+                return None
+            hdr = json_to_fits_header(hdr_dict)   # structural stripped, WCS kept
+        else:
+            hdr = fits.getheader(infile, memmap=False)
+    except Exception:
+        return None
+    return hdr if _header_has_celestial_wcs(hdr) else None
+
+
+def _write_reuse_wcs_fits(infile: str, infile_is_jpeg: bool, wcs_hdr, output_wcs: str) -> None:
+    """Write output_wcs = the input image data + its ready WCS header, so the
+    rectifier can reproject straight from it without solving."""
+    if infile_is_jpeg:
+        if not _have_pil:
+            raise RuntimeError("Pillow is required for JPEG input (pip install Pillow)")
+        with Image.open(infile) as img:
+            if img.mode == "L":
+                arr = np.array(img, dtype=np.uint8)
+            else:
+                arr = np.transpose(np.array(img.convert("RGB"), dtype=np.uint8), (2, 0, 1))
+        fits.PrimaryHDU(data=arr, header=wcs_hdr).writeto(output_wcs, overwrite=True)
+    else:
+        with fits.open(infile, memmap=False) as h:
+            fits.PrimaryHDU(data=h[0].data, header=h[0].header).writeto(output_wcs, overwrite=True)
+
+
 def fits_to_jpeg(fits_path: str, jpeg_path: str, quality: int) -> None:
     """Write a solved FITS (mono or RGB) to JPEG, embedding its header (WCS
     included) in a COM marker. Pixel values are treated as 8-bit display data
@@ -440,13 +492,8 @@ def _write_scale_fov(wcs_fit_path, verbose):
             ny, nx = data.shape[-2:]
             w = WCS(hdr, naxis=2)
 
-            # Extract CD matrix
-            if w.wcs.cd is not None and w.wcs.cd.size == 4:
-                cd = np.array(w.wcs.cd, dtype=float)
-            else:
-                pc = np.array(w.wcs.get_pc(), dtype=float)
-                cdelt = np.array(w.wcs.cdelt, dtype=float)
-                cd = pc * cdelt.reshape(2, 1)
+            # Extract CD matrix (handles CD or PC+CDELT)
+            cd = _cd_matrix(w)
 
             # Pixel scale (arcsec/pixel) from CD matrix
             sx = np.hypot(cd[0, 0], cd[1, 0]) * 3600.0  # deg -> arcsec
@@ -625,6 +672,18 @@ def cleanup_astrometry_side_products(input_fits: str, verbose: bool):
         print_if_verbose(f"Warning: cleanup failed: {e}", verbose)
 
 
+def _cd_matrix(w):
+    """Return the 2x2 CD matrix of a WCS whether it is stored as CD or as
+    PC+CDELT. astropy raises AttributeError on w.wcs.cd when only PC is present
+    (e.g. astrometry.net WCS round-tripped through astropy), so guard with
+    has_cd() instead of testing w.wcs.cd for None."""
+    if w.wcs.has_cd():
+        return np.array(w.wcs.cd, dtype=float)
+    pc = np.array(w.wcs.get_pc(), dtype=float)
+    cdelt = np.array(w.wcs.cdelt, dtype=float)
+    return pc * cdelt.reshape(2, 1)
+
+
 def read_cd_center_scale(wcs_fit_path):
     """Read CD matrix, image center (RA,Dec), and shape from a solved WCS FITS."""
     with fits.open(wcs_fit_path) as hdul:
@@ -632,13 +691,8 @@ def read_cd_center_scale(wcs_fit_path):
         data = hdul[0].data
     ny, nx = data.shape[-2:]
     w = WCS(hdr, naxis=2)
-    if w.wcs.cd is not None and w.wcs.cd.size == 4:
-        cd = np.array(w.wcs.cd, dtype=float)
-    else:
-        pc = np.array(w.wcs.get_pc(), dtype=float)
-        cdelt = np.array(w.wcs.cdelt, dtype=float)
-        cd = pc * cdelt.reshape(2, 1)
-    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+    cd = _cd_matrix(w)
+    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
     return cd, (ra_c, dec_c), (ny, nx)
 
 
@@ -677,21 +731,20 @@ def build_rectified_wcs_header(wcs_fits: str,
         ny, nx = data.shape[-2:]
         w = WCS(hdr, naxis=2)
 
-        # Extract CD matrix WITH rotation from solved WCS
-        if w.wcs.cd is not None and w.wcs.cd.size == 4:
-            cd = np.array(w.wcs.cd, dtype=float)
-        else:
-            pc = np.array(w.wcs.get_pc(), dtype=float)
-            cdelt = np.array(w.wcs.cdelt, dtype=float)
-            cd = pc * cdelt.reshape(2, 1)
+        # Extract CD matrix WITH rotation from solved WCS (handles CD or PC+CDELT)
+        cd = _cd_matrix(w)
 
-        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
-
-        # Pure TAN with original CD (rotation preserved, SIP stripped)
+        # Pure TAN with the input's EXACT linear reference. --no-rotate only
+        # strips SIP and keeps the CD, so copy CRPIX/CRVAL verbatim: at CRPIX the
+        # SIP distortion is zero by construction, so CRVAL still holds for the
+        # linear (TAN) WCS. The old code recomputed CRVAL at the centre via
+        # wcs_pix2world(origin=0) but set CRPIX in the 1-based FITS convention,
+        # mixing 0- and 1-based indexing -> a uniform ~sqrt(2) px shift on every
+        # frame. Copying keeps the output geometrically identical to the input.
         w_tan = WCS(naxis=2)
         w_tan.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-        w_tan.wcs.crval = [ra_c, dec_c]
-        w_tan.wcs.crpix = [nx / 2.0, ny / 2.0]
+        w_tan.wcs.crpix = [float(w.wcs.crpix[0]), float(w.wcs.crpix[1])]
+        w_tan.wcs.crval = [float(w.wcs.crval[0]), float(w.wcs.crval[1])]
         w_tan.wcs.cd = cd
 
         hdr_tan = w_tan.to_header()
@@ -724,19 +777,16 @@ def build_rectified_wcs_header(wcs_fits: str,
     if center_ra_dec is not None:
         ra_c, dec_c = center_ra_dec
     else:
-        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+        # origin=1: this centre is placed at the 1-based CRPIX below, so query it
+        # in the same 1-based convention (origin=0 here shifted output by ~sqrt(2) px).
+        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
 
     if base_cd is not None:
         cd_use = np.array(base_cd, dtype=float)
         if base_shape is not None:
             ny, nx = base_shape[0], base_shape[1]
     else:
-        if w.wcs.cd is not None and w.wcs.cd.size == 4:
-            cd_orig = np.array(w.wcs.cd, dtype=float)
-        else:
-            pc = np.array(w.wcs.get_pc(), dtype=float)
-            cdelt = np.array(w.wcs.cdelt, dtype=float)
-            cd_orig = pc * cdelt.reshape(2, 1)
+        cd_orig = _cd_matrix(w)
         sx = np.hypot(cd_orig[0, 0], cd_orig[1, 0])
         sy = np.hypot(cd_orig[0, 1], cd_orig[1, 1])
         scale_deg = (float(pixscale_arcsec) / 3600.0) if pixscale_arcsec else (sx + sy) / 2.0
@@ -777,14 +827,19 @@ def merge_headers_preserve_wcs(rect_hdr, src_hdr):
 
 
 def _sanitize_2d(data_2d):
-    """Replace NaN/Inf with fill value in a 2D float32 array. Returns sanitized copy."""
+    """Replace NaN/Inf in a 2D float32 array with 0.0; return a sanitized copy.
+
+    Out-of-footprint (no-data) pixels from reprojection are set to 0 (black =
+    no-data): tile/overlay consumers rely on this for clean edge fades, and
+    mosaic/stacking must exclude them via a coverage mask anyway. Filling with
+    the image median would fabricate plausible grey 'sky' where there is no data
+    -- misleading fake content, avoided by policy."""
     data_2d = np.asarray(data_2d, dtype=np.float32)
     finite_mask = np.isfinite(data_2d)
     if not finite_mask.any():
         return None  # signal: all NaN
     if not finite_mask.all():
-        fill = float(np.median(data_2d[finite_mask]))
-        data_2d[~finite_mask] = fill
+        data_2d[~finite_mask] = 0.0
     return data_2d
 
 
@@ -848,6 +903,7 @@ def run_wcs_resample(wcs_fits: str,
     Supports both 2D (mono) and 3D (RGB) input in wcs_fits.
     For RGB: reprojects each channel separately, then stacks.
     If no_rotate: strips SIP distortion but preserves field rotation.
+    Out-of-footprint (no-data) pixels are set to 0 (black = no-data).
     """
     rect_wcs_hdr, (ny, nx) = build_rectified_wcs_header(
         wcs_fits, center_ra_dec=center_ra_dec, pixscale_arcsec=pixscale_arcsec,
@@ -960,6 +1016,18 @@ def run_wcs_resample(wcs_fits: str,
 
         fits.PrimaryHDU(data=data_out,
                         header=rect_wcs_hdr).writeto(output_rect, overwrite=True)
+
+    # wcs-resample path: the external tool wrote output_rect directly, bypassing
+    # _sanitize_2d. Force any no-data (non-finite) pixels to 0 (black = no-data),
+    # matching the interp/exact path.
+    if rect_method == "wcsresample":
+        with fits.open(output_rect, mode="update", memmap=False) as h:
+            arr = h[0].data
+            if arr is not None:
+                bad = ~np.isfinite(arr)
+                if bad.any():
+                    arr[bad] = 0.0
+                    h.flush()
 
     # Merge non-WCS metadata from source into output
     with fits.open(wcs_fits) as src, fits.open(output_rect, mode="update") as dst:
@@ -1305,7 +1373,7 @@ def get_center_from_wcs(wcs_fit_path: str) -> Tuple[float, float]:
         hdr = hdul[0].header
     ny, nx = data.shape[-2:]
     w = WCS(hdr, naxis=2)
-    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
     return float(ra_c), float(dec_c)
 
 
@@ -1329,12 +1397,18 @@ def main():
     parser.add_argument("--rect-center-dec", type=float, help="Rectified center Dec (deg).")
     parser.add_argument("--rect-pixscale", type=float, help="Rectified pixel scale (arcsec/pix).")
     parser.add_argument("--rect-method", choices=["wcsresample", "interp", "exact"], default="wcsresample",
-                        help="Resampling engine: wcsresample (fast), interp (bilinear), exact (highest fidelity).")
+                        help="Resampling engine: wcsresample (fast), interp (bilinear), exact (highest fidelity). "
+                             "Out-of-footprint (no-data) pixels are always set to 0 (black = no-data).")
 
     parser.add_argument("--no-rotate", action="store_true",
                         help="Rectify without derotation: strip SIP distortion but preserve "
                              "field rotation. Image dimensions unchanged, no black borders. "
                              "Useful for mosaics, surveys, and tile pyramids.")
+    parser.add_argument("--reuse-wcs", action="store_true",
+                        help="If the input already carries a ready WCS (our JPEG COM marker, "
+                             "or a standard solved-FITS header), skip solve-field and reproject "
+                             "straight from that WCS (use with -r; --no-rotate strips SIP). "
+                             "Falls back to solving (with a warning) if no WCS is present.")
     parser.add_argument("--fine-align", action="store_true",
                         help="After rectification, subpixel-align all _rect.fit to the first (phase correlation + cubic spline shift).")
 
@@ -1435,6 +1509,7 @@ def main():
         temp_solve_fits = None
         output_wcs = None
         solve_input = None
+        reuse_hdr = None
         try:
             abs_out = os.path.abspath(outbase)
             base_out_noext, _ = os.path.splitext(abs_out)
@@ -1454,29 +1529,45 @@ def main():
             else:
                 output_rect = base_out_noext + "_rect.fit"
 
-            # JPEG input: decode to a temp FITS (carrying recovered hints) and
-            # solve that; the output is converted back to JPEG below.
+            # --reuse-wcs: if the input already carries a ready WCS, skip solving
+            # and reproject straight from it (both our JPEG-COM and plain FITS).
+            reuse_hdr = None
+            if args.reuse_wcs:
+                reuse_hdr = _read_source_wcs_header(infile, infile_is_jpeg)
+                if reuse_hdr is None:
+                    print(f"  [reuse-wcs] no ready WCS in {os.path.basename(infile)}; "
+                          f"falling back to solve-field", file=sys.stderr)
+
+            # JPEG input (when solving): decode to a temp FITS carrying recovered
+            # hints and solve that; the output is converted back to JPEG below.
             solve_input = infile
-            if infile_is_jpeg:
+            if infile_is_jpeg and reuse_hdr is None:
                 temp_solve_fits = base_out_noext + "_solvetmp.fit"
                 jpeg_to_temp_fits(infile, temp_solve_fits)
                 solve_input = temp_solve_fits
 
-            run_solve_field(
-                input_fits=solve_input,
-                output_wcs=output_wcs,
-                tweak_order=args.tweak_order,
-                use_wsl=use_wsl,
-                verbose=args.verbose,
-                ra_override=cli_ra,
-                dec_override=cli_dec,
-                radius_override=args.radius,
-                fovx=args.fovx,
-                fovy=args.fovy,
-                downsample=args.downsample,
-            )
+            if reuse_hdr is not None:
+                # Reuse: write output_wcs = image data + the ready WCS; no solve.
+                _write_reuse_wcs_fits(infile, infile_is_jpeg, reuse_hdr, output_wcs)
+                print_if_verbose(
+                    f"[reuse-wcs] reprojecting from embedded WCS in "
+                    f"{os.path.basename(infile)}; solve-field skipped", args.verbose)
+            else:
+                run_solve_field(
+                    input_fits=solve_input,
+                    output_wcs=output_wcs,
+                    tweak_order=args.tweak_order,
+                    use_wsl=use_wsl,
+                    verbose=args.verbose,
+                    ra_override=cli_ra,
+                    dec_override=cli_dec,
+                    radius_override=args.radius,
+                    fovx=args.fovx,
+                    fovy=args.fovy,
+                    downsample=args.downsample,
+                )
 
-            if args.refit_wcs:
+            if args.refit_wcs and reuse_hdr is None:
                 applied = refit_wcs_from_corr(
                     input_fits=solve_input,
                     wcs_fits=output_wcs,
@@ -1521,7 +1612,8 @@ def main():
                 )
                 rect_paths_for_fine.append(output_rect)
 
-            cleanup_astrometry_side_products(solve_input, verbose=args.verbose)
+            if reuse_hdr is None:   # reuse skips solving -> no astrometry side products
+                cleanup_astrometry_side_products(solve_input, verbose=args.verbose)
 
             # JPEG input -> JPEG output(s) with embedded WCS. The solve product
             # (_wcs) is converted now; the rectified product is deferred until
@@ -1548,11 +1640,13 @@ def main():
             fail += 1
             # Don't leave astrometry side products behind when a later step
             # (e.g. rectify) fails; for JPEG input also drop the temp + orphan _wcs.fit.
-            if solve_input:
+            if solve_input and reuse_hdr is None:
                 cleanup_astrometry_side_products(solve_input, verbose=args.verbose)
             if temp_solve_fits is not None:
                 _safe_remove(output_wcs)
                 _safe_remove(temp_solve_fits)
+            elif reuse_hdr is not None and (infile_is_jpeg or args.rectify):
+                _safe_remove(output_wcs)   # reuse wrote a derived temp _wcs.fit
             progress_bar(idx, n)
             print(f" FAIL: {os.path.basename(infile)}  [{e}]" + (' ' * 30), file=sys.stderr)
 

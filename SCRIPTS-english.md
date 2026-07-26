@@ -818,6 +818,7 @@ autosolve.py [options] input_spec output_spec
 - `--scale-low`, `--scale-high` — scale range (arcsec/pixel)
 - `--radius` — search radius (degrees)
 - `--no-rotate` — rectify without derotation — corrects distortion while preserving field rotation. No size change, no black borders. For mosaics and surveys.
+- `--reuse-wcs` — if the input already carries a ready WCS (our JPEG with WCS in a COM marker, or a plain solved FITS), skip solve-field and reproject straight from it (with `-r`; `--no-rotate` strips SIP, edges = 0). No WCS → warning + normal solve. JPEG in → JPEG out; FITS in → FITS (`_rect.fit`), display JPEG via `fits2tiff` separately.
 - `--jpeg [Q]` — JPEG output quality 1–100 (default 99); applies when the input is a JPEG
 - `--fovx D` / `--fovy D` — field of view width / height in **degrees**; the pixel scale is computed from it (give one)
 - `--ra V` / `--dec V` — search centre: decimal **degrees** or sexagesimal (RA in **hours**)
@@ -827,6 +828,10 @@ autosolve.py [options] input_spec output_spec
 
 **Reprojection (--rectify)**:
 Transforms image to gnomonic (TAN) projection — projection onto a plane tangent to the celestial sphere. By default center is taken from first file; can be set explicitly via `--rect-center-ra` and `--rect-center-dec`.
+
+- `--rect-method {wcsresample,interp,exact}` — resampling engine (default `wcsresample`; `interp` = bilinear, `exact` = highest fidelity).
+
+Out-of-footprint (no-data) pixels after rectification are always set to **0** (black = no-data): tile/overlay consumers rely on this for clean edge fades, and mosaic/stacking must exclude them via a coverage mask anyway. (Filling with the median would fabricate grey 'sky' where there is no data — fake content, avoided by policy.)
 
 **JPEG input/output**:
 When the input is a JPEG, autosolve decodes it, solves, and writes the result back to a JPEG with the solved WCS packed into a COM marker (the same format fits2tiff writes). Output: `<base>_wcs.jpg` (and `<base>_rect.jpg` with `--rectify`). If the input JPEG already carries an embedded FITS header (e.g. exported by fits2tiff), acquisition hints `FOCALLEN`/`RA`/`DEC` are recovered from it so the solve runs faster. Requires Pillow. A JPEG input always yields a JPEG output (FITS output is not available for JPEG input).
@@ -940,7 +945,7 @@ fits2tiff.py [--bits 8|16|32] [--format tiff|jpeg|png] [--stretch] [--keepcolor]
 - `--bits 32` — normalize [min,max] → [0.0,1.0], float32
 - (no --bits) — auto: int8/uint8→8, int16/uint16→16, everything else→32
 - `--format F` — output format: tiff, jpeg, png (default: by extension)
-- `--stretch` — nonlinear auto stretch for screen display
+- `--stretch` — nonlinear auto stretch for screen display; honors `--bits` for TIFF (16/32 = stretched TIFF without banding), JPEG/PNG stay 8-bit
 - `--keepcolor` — preserve color during stretch
 - `--bin 2|4` — downscale by 2x or 4x
 - `--jpeg Q` — JPEG quality (1-100)
@@ -961,6 +966,9 @@ fits2tiff --bits 8 light0001.fit preview0001.tif
 
 # JPEG with auto stretch for previews
 fits2tiff --stretch --bin 2 *.fit *.jpg
+
+# Stretched 16-bit TIFF (no banding, for further editing)
+fits2tiff sum_l.fit out_l.tif --stretch --bits 16
 
 # Numbered output
 fits2tiff --bits 16 *.fit out0001.tif
@@ -1216,22 +1224,25 @@ Automatically detects stars, matches them across frames, and aligns images with 
 
 **Dependencies**: scipy, sep
 
-**Two operating modes:**
+**Operating modes:**
 
-1. **Reference alignment** (with `--ref`) — aligns all target frames to a reference frame
-2. **Chromatic correction** (without `--ref`) — aligns R and B channels to G within each RGB file. Corrects atmospheric refraction and chromatic aberration
+1. **With `--ref`** — align all target frames to the given reference frame by stars.
+2. **Without `--ref`, several frames (default)** — align all frames to the **first** frame.
+3. **Without `--ref`, a single file or `--rgb`** — chromatic correction: align R and B channels to G within each file (atmospheric refraction + chromatic aberration).
 
 **Syntax**:
 ```
-staralign input_spec output_spec --ref reference.fit [options]
-staralign input_spec output_spec                     (chromatic mode)
+staralign input_spec output_spec [--ref reference.fit] [options]
+staralign *.fit out0001.fit                 (no --ref: align to the first frame)
+staralign color.fit corrected.fit           (single file: chromatic correction)
+staralign *.fit out0001.fit --rgb           (chromatic correction on each file)
 ```
 
 **Parameters**:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--ref FILE` | — | Reference frame (omit for chromatic mode) |
+| `--ref FILE` | first frame | Reference frame (omitted → defaults to the first input frame) |
 | `--model {tps\|projective}` | tps | Registration model |
 | `--smoothness F` | 0.25 | TPS smoothness (0 = exact interpolation) |
 | `--descriptors N` | 20 | Pentagons per star (5-50) |
@@ -1260,6 +1271,7 @@ staralign input_spec output_spec                     (chromatic mode)
 | `--threads N` | CPU-1 | Worker threads (forced to 1 in --debug mode) |
 | `--debug` | off | Detailed per-frame diagnostics and timing |
 | `--no-mirror` | off | Disable mirror fallback |
+| `--rgb` | off | Chromatic correction (R,B→G) within each input file, instead of aligning frames |
 
 **Auto-retry**: on matching failure, automatically retries with more stars: levels [N, 2N, 2.5N, 3N], capped by detected count. Disable with `--no-retry`.
 
@@ -1291,11 +1303,14 @@ staralign Ha_*.fit aligned0001.fit --ref R_ref.fit --max-stars 200
 # Multi-threaded
 staralign *.fit out0001.fit --ref ref.fit --threads 4
 
-# Chromatic correction in RGB file
+# No --ref: align all frames to the first
+staralign *.fit out0001.fit
+
+# Chromatic correction in a single RGB file
 staralign color.fit corrected.fit
 
-# Batch chromatic correction
-staralign *.fit out0001.fit
+# Batch chromatic correction (per-channel, each file)
+staralign *.fit out0001.fit --rgb
 ```
 
 ---
@@ -1609,9 +1624,15 @@ stack mix_*.fit result.fit --sigma --equalize          # equal frame weights (in
 
 Replaces the brightness information in a color image with a higher-quality luminance, preserving color.
 
+**Methods**:
+- `ratio` (default) — `C_out = C × L_fit / (R+G+B + eps)`. Using `R+G+B` (not the perceptual `(R+2G+B)/4`) gives the identity `sum(C_out) = L_fit` and stays consistent with the super-luminance.
+- `hsl` — RGB→HSL, replace L (after LinearFit), HSL→RGB.
+
+**Super-luminance (`--superlum`)**: optional max-SNR master luminance — inverse-variance (SNR²) blend of `L` and the synthetic luminance `R+G+B` (both scale-matched). Noise is measured from the background; the `SNR_L:SNR_syn` ratio and expected gain are printed. Off by default: `L` is used as-is (the input `L` may already be a super-luminance). **Assumption**: RGB must already be balanced — otherwise the synthetic `R+G+B` luminance is skewed and the SNR weights biased; use `--auto` or pre-balance the channels first.
+
 **Syntax**:
 ```
-lrgb.py L.fit R.fit G.fit B.fit output.fit [--method ratio|hsl] [--saturation S] [--warmth W]
+lrgb.py L.fit R.fit G.fit B.fit output.fit [options]
 lrgb.py L.fit RGB.fit output.fit [options]
 ```
 
@@ -1619,6 +1640,11 @@ lrgb.py L.fit RGB.fit output.fit [options]
 - `--method M` — ratio (default) or hsl
 - `--saturation S` — saturation boost (default 1.0)
 - `--warmth W` — color temperature shift along Planck curve (-1..+1, default 0)
+- `--lightness K` — MTF on lightness (default 0.5 = identity)
+- `--superlum` — build super-luminance (SNR² blend of `L` + `R+G+B`) before combining
+- `--dry-run` — measure and print the `L:syn` noise ratio and expected SNR gain, then exit
+- `--eps E` — ratio denominator floor (default 0.002, normalized [0,1]); shadow numerical stability only
+- `--bg-desat K` — pull low-signal pixels toward neutral grey: colour kept for signal ≥ K·sigma above background, faded below (default 0 = off; typically 2–4). Cleans background colour noise
 - `--auto` — full pipeline: RGB balance + background flatten + LRGB combine
 - `--mask-center` — use central region for background estimation (with `--auto`)
 
@@ -1626,6 +1652,8 @@ lrgb.py L.fit RGB.fit output.fit [options]
 ```bash
 lrgb L.fit R.fit G.fit B.fit result.fit
 lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 lrgb --auto L.fit R.fit G.fit B.fit result.fit
 ```
 

@@ -30,12 +30,12 @@ import star_resample
 def usage():
     sys.stderr.write(
         "Usage:\n"
-        "  staralign.py input_spec output_spec --ref reference.fit [options]\n"
+        "  staralign.py input_spec output_spec [--ref reference.fit] [options]\n"
         "\n"
         "  input_spec   - target frames: wildcard (*.fit), numbered (img0001.fit),\n"
         "                 @list.txt, or single file\n"
         "  output_spec  - output files: single, numbered pattern, or wildcard\n"
-        "  --ref FILE   - reference frame (required)\n"
+        "  --ref FILE   - reference frame (default: the first input frame)\n"
         "\n"
         "Options:\n"
         "  --model {tps|projective}  Registration model (default: tps)\n"
@@ -63,10 +63,14 @@ def usage():
         "                  Forced to 1 in --debug mode\n"
         "  --debug         Print detailed per-frame diagnostics and timing\n"
         "  --no-mirror     Disable mirror fallback attempt\n"
+        "  --rgb           Chromatic mode: align R,B -> G channels within EACH input\n"
+        "                  file (per-channel), instead of aligning frames to a reference\n"
         "\n"
-        "Chromatic aberration correction:\n"
-        "  If --ref is omitted and input is a single RGB file, aligns R and B\n"
-        "  channels to G channel (fixes atmospheric refraction + chromatic aberration).\n"
+        "Modes (when --ref is omitted):\n"
+        "  Default        - align all input frames to the FIRST frame (star-based)\n"
+        "  Single file    - chromatic correction: align R,B -> G channels within it\n"
+        "  --rgb          - chromatic correction on every input file (fixes atmospheric\n"
+        "                   refraction + chromatic aberration on colour frames)\n"
     )
     sys.exit(1)
 
@@ -89,6 +93,7 @@ def parse_args(argv):
     debug = False
     no_mirror = False
     no_retry = False
+    rgb = False
 
     # Parse named options
     filtered = []
@@ -139,6 +144,9 @@ def parse_args(argv):
         elif args[i] == '--no-retry':
             no_retry = True
             i += 1
+        elif args[i] == '--rgb':
+            rgb = True
+            i += 1
         else:
             filtered.append(args[i])
             i += 1
@@ -165,6 +173,7 @@ def parse_args(argv):
         'debug': debug,
         'no_mirror': no_mirror,
         'no_retry': no_retry,
+        'rgb': rgb,
         'n_threads': max(1, n_threads),
     }
 
@@ -625,7 +634,9 @@ def _chromatic_align(opts):
             if data.ndim != 3 or data.shape[0] < 3:
                 sys.stderr.write(
                     f"[{file_i}/{total}] {basename}: FAIL "
-                    f"not RGB ({data.ndim}D, {data.shape[0] if data.ndim==3 else 1} ch)\n")
+                    f"not RGB ({data.ndim}D, {data.shape[0] if data.ndim==3 else 1} ch)"
+                    f" -- chromatic mode needs a colour frame; to align frames pass"
+                    f" --ref FRAME.fit (or give several frames)\n")
                 n_fail += 1
                 failed_files.append((basename, 'not RGB'))
                 continue
@@ -783,10 +794,23 @@ def _chromatic_align(opts):
 def main():
     opts = parse_args(sys.argv)
 
-    # Chromatic mode: no --ref → align R,B to G within each file
+    # No --ref: default is star-based frame alignment to the FIRST frame.
+    # Per-channel (chromatic) alignment happens only with an explicit --rgb, or
+    # when there is a single input file.
     if opts['ref_file'] is None:
-        _chromatic_align(opts)
-        return
+        try:
+            files = batch_utils.expand_input_spec(opts['input_spec'])
+        except Exception as e:
+            sys.stderr.write(f"Error: {e}\n")
+            sys.exit(1)
+        if opts['rgb'] or len(files) == 1:
+            _chromatic_align(opts)
+            return
+        opts['ref_file'] = files[0]
+        sys.stderr.write(
+            f"No --ref given: aligning frames to the first as reference "
+            f"({os.path.basename(files[0])}).\n")
+        # fall through to frame alignment below
 
     # Force single-threaded in debug mode
     n_threads = 1 if opts['debug'] else opts['n_threads']

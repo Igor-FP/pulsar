@@ -848,6 +848,8 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
                         <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
+                        <div class="param"><span class="param-name">--reuse-wcs</span><span class="param-desc">если вход уже несёт готовый WCS (наш JPEG-COM или solved FITS) — пропустить solve-field и репроецировать из него (с -r; --no-rotate снимает SIP, края 0). Нет WCS → предупреждение + обычный солв</span></div>
+                        <div class="param"><span class="param-name">--rect-method M</span><span class="param-desc">движок ресэмплинга: wcsresample (по умолчанию), interp, exact. Вне-футпринтные (нет-данных) пиксели всегда 0 (чёрный = нет-данных)</span></div>
                         <div class="param"><span class="param-name">--jpeg [Q]</span><span class="param-desc">качество JPEG-выхода 1–100 (по умолчанию 99); действует при JPEG-входе</span></div>
                         <div class="param"><span class="param-name">--fovx / --fovy D</span><span class="param-desc">поле зрения по ширине / высоте в градусах; из него считается масштаб (одно из)</span></div>
                         <div class="param"><span class="param-name">--ra / --dec V</span><span class="param-desc">центр поиска: десятичные градусы или шестидесятеричные (RA в часах)</span></div>
@@ -979,23 +981,33 @@ mtf stretched.fit linear.fit --inverse</code></pre>
 
                     <h4>Методы</h4>
                     <ul>
-                        <li><strong>ratio</strong> (по умолчанию): масштабирование R,G,B по L_new/L_old</li>
+                        <li><strong>ratio</strong> (по умолчанию): <code>C_out = C × L_fit / (R+G+B + ε)</code>. Знаменатель <code>R+G+B</code> (не перцептивный <code>(R+2G+B)/4</code>) даёт тождество <code>Σ C_out = L_fit</code> и согласован с super-luminance</li>
                         <li><strong>hsl</strong>: RGB→HSL, замена L, HSL→RGB</li>
                     </ul>
 
+                    <h4>Super-luminance (<code>--superlum</code>)</h4>
+                    <p>Опциональная мастер-яркость с максимальным SNR — инверсно-дисперсионная (SNR²) смесь <code>L</code> и синтетической яркости <code>R+G+B</code> (обе после подгонки шкал). Шум оценивается по фону, печатается отношение <code>SNR_L:SNR_syn</code> и ожидаемый выигрыш. По умолчанию выключено: <code>L</code> используется как есть (входной <code>L</code> уже может быть super-luminance). <strong>Допущение</strong>: RGB должен быть уже сбалансирован — иначе синтетическая яркость <code>R+G+B</code> перекошена и веса SNR смещаются; используйте <code>--auto</code> или пред-баланс каналов.</p>
+
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>lrgb.py L.fit R.fit G.fit B.fit output.fit [--method ratio|hsl] [--saturation S] [--warmth W] [--lightness K]</code>
+                        <code>lrgb.py L.fit R.fit G.fit B.fit output.fit [--method ratio|hsl] [--superlum] [--bg-desat K] [--eps E] [--saturation S] [--warmth W] [--lightness K]</code>
                     </div>
 
-                    <h4>Примеры</h4>
-                    <h4>Автоматический пайплайн</h4>
-                    <p><code>--auto</code> — полный пайплайн: баланс RGB + выравнивание фона + LRGB-совмещение.<br>
-                    <code>--mask-center</code> — центральная область для оценки фона.</p>
+                    <h4>Параметры</h4>
+                    <ul>
+                        <li><code>--superlum</code> — построить super-luminance (SNR²-смесь <code>L</code> + <code>R+G+B</code>) перед совмещением</li>
+                        <li><code>--dry-run</code> — измерить отношение шумов <code>L:syn</code> и ожидаемый выигрыш SNR, без записи</li>
+                        <li><code>--eps E</code> — пол знаменателя ratio (default 0.002); только численная стабильность в тенях</li>
+                        <li><code>--bg-desat K</code> — тянуть слабый сигнал к нейтральному серому: цвет держится выше <code>K·σ</code> над фоном, гаснет ниже (default 0 = выкл; типично 2–4)</li>
+                        <li><code>--auto</code> — полный пайплайн: баланс RGB + выравнивание фона + LRGB-совмещение</li>
+                        <li><code>--mask-center</code> — центральная область для оценки фона</li>
+                    </ul>
 
                     <h4>Примеры</h4>
                     <pre><code>lrgb L.fit R.fit G.fit B.fit result.fit
 lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
+lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 lrgb --auto L.fit R.fit G.fit B.fit result.fit</code></pre>
                 </div>
             </section>
