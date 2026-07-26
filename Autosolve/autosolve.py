@@ -692,7 +692,7 @@ def read_cd_center_scale(wcs_fit_path):
     ny, nx = data.shape[-2:]
     w = WCS(hdr, naxis=2)
     cd = _cd_matrix(w)
-    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
     return cd, (ra_c, dec_c), (ny, nx)
 
 
@@ -734,13 +734,17 @@ def build_rectified_wcs_header(wcs_fits: str,
         # Extract CD matrix WITH rotation from solved WCS (handles CD or PC+CDELT)
         cd = _cd_matrix(w)
 
-        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
-
-        # Pure TAN with original CD (rotation preserved, SIP stripped)
+        # Pure TAN with the input's EXACT linear reference. --no-rotate only
+        # strips SIP and keeps the CD, so copy CRPIX/CRVAL verbatim: at CRPIX the
+        # SIP distortion is zero by construction, so CRVAL still holds for the
+        # linear (TAN) WCS. The old code recomputed CRVAL at the centre via
+        # wcs_pix2world(origin=0) but set CRPIX in the 1-based FITS convention,
+        # mixing 0- and 1-based indexing -> a uniform ~sqrt(2) px shift on every
+        # frame. Copying keeps the output geometrically identical to the input.
         w_tan = WCS(naxis=2)
         w_tan.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-        w_tan.wcs.crval = [ra_c, dec_c]
-        w_tan.wcs.crpix = [nx / 2.0, ny / 2.0]
+        w_tan.wcs.crpix = [float(w.wcs.crpix[0]), float(w.wcs.crpix[1])]
+        w_tan.wcs.crval = [float(w.wcs.crval[0]), float(w.wcs.crval[1])]
         w_tan.wcs.cd = cd
 
         hdr_tan = w_tan.to_header()
@@ -773,7 +777,9 @@ def build_rectified_wcs_header(wcs_fits: str,
     if center_ra_dec is not None:
         ra_c, dec_c = center_ra_dec
     else:
-        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+        # origin=1: this centre is placed at the 1-based CRPIX below, so query it
+        # in the same 1-based convention (origin=0 here shifted output by ~sqrt(2) px).
+        ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
 
     if base_cd is not None:
         cd_use = np.array(base_cd, dtype=float)
@@ -1367,7 +1373,7 @@ def get_center_from_wcs(wcs_fit_path: str) -> Tuple[float, float]:
         hdr = hdul[0].header
     ny, nx = data.shape[-2:]
     w = WCS(hdr, naxis=2)
-    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 0)[0]
+    ra_c, dec_c = w.wcs_pix2world([[nx / 2.0, ny / 2.0]], 1)[0]
     return float(ra_c), float(dec_c)
 
 
