@@ -73,7 +73,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | ngain.py | Normalize by gain (multiply to target median) |
 | noffset.py | Normalize by offset (add to target median) |
 | autoflat.py | Background field flattening (cell-based and min-binning modes) |
-| autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support, JPEG in→out with embedded WCS) |
+| autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support, JPEG in→out with embedded WCS; --reuse-wcs reprojects from an existing WCS without re-solving; out-of-footprint pixels → 0) |
 | cosme.py | Hot pixel correction |
 | makedark.py | Meta-script: create master darks + cosme lists |
 | makeflat.py | Meta-script: create master flats per filter |
@@ -87,7 +87,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | crop.py | Crop FITS images (by size/center or margins) |
 | debayer.py | Demosaic Bayer-pattern FITS to RGB |
 | hotfix.py | Remove single hot (and cold) pixels |
-| lrgb.py | LRGB luminance layering (HSL and ratio methods) |
+| lrgb.py | LRGB luminance layering (HSL and ratio methods; optional SNR² super-luminance blend, R+G+B combine, background desaturation) |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
 | rgbbalance.py | RGB color balance and brightness normalization |
 | stack.py | Optimal weighted stacking with sigma-fade clipping |
