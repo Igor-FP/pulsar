@@ -818,6 +818,7 @@ autosolve.py [options] input_spec output_spec
 - `--scale-low`, `--scale-high` — scale range (arcsec/pixel)
 - `--radius` — search radius (degrees)
 - `--no-rotate` — rectify without derotation — corrects distortion while preserving field rotation. No size change, no black borders. For mosaics and surveys.
+- `--reuse-wcs` — if the input already carries a ready WCS (our JPEG with WCS in a COM marker, or a plain solved FITS), skip solve-field and reproject straight from it (with `-r`; `--no-rotate` strips SIP, edges = 0). No WCS → warning + normal solve. JPEG in → JPEG out; FITS in → FITS (`_rect.fit`), display JPEG via `fits2tiff` separately.
 - `--jpeg [Q]` — JPEG output quality 1–100 (default 99); applies when the input is a JPEG
 - `--fovx D` / `--fovy D` — field of view width / height in **degrees**; the pixel scale is computed from it (give one)
 - `--ra V` / `--dec V` — search centre: decimal **degrees** or sexagesimal (RA in **hours**)

@@ -848,6 +848,7 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                         <div class="param"><span class="param-name">--scale-low/high</span><span class="param-desc">диапазон масштаба (arcsec/pixel)</span></div>
                         <div class="param"><span class="param-name">--radius</span><span class="param-desc">радиус поиска (градусы)</span></div>
                         <div class="param"><span class="param-name">--no-rotate</span><span class="param-desc">ректификация без деротации — коррекция дисторсии с сохранением ориентации. Для мозаик и обзоров.</span></div>
+                        <div class="param"><span class="param-name">--reuse-wcs</span><span class="param-desc">если вход уже несёт готовый WCS (наш JPEG-COM или solved FITS) — пропустить solve-field и репроецировать из него (с -r; --no-rotate снимает SIP, края 0). Нет WCS → предупреждение + обычный солв</span></div>
                         <div class="param"><span class="param-name">--rect-method M</span><span class="param-desc">движок ресэмплинга: wcsresample (по умолчанию), interp, exact. Вне-футпринтные (нет-данных) пиксели всегда 0 (чёрный = нет-данных)</span></div>
                         <div class="param"><span class="param-name">--jpeg [Q]</span><span class="param-desc">качество JPEG-выхода 1–100 (по умолчанию 99); действует при JPEG-входе</span></div>
                         <div class="param"><span class="param-name">--fovx / --fovy D</span><span class="param-desc">поле зрения по ширине / высоте в градусах; из него считается масштаб (одно из)</span></div>
