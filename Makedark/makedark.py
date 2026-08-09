@@ -54,7 +54,7 @@ def usage():
         "    cosme<exp>.lst  - hot pixel list for each master dark\n"
         "    bias.fit        - master bias (if bias_spec was a file list)\n"
         "\n"
-        "Exposure format: 300s, 500ms (ms if < 1 second)\n"
+        "Exposure format: 300s, 500ms (ms if < 1 s), 500mks (microseconds if < 1 ms)\n"
     )
     sys.exit(1)
 
@@ -125,16 +125,17 @@ def group_by_exposure(files):
 
 
 def format_exposure_suffix(exp_seconds):
-    """Format exposure time for filename."""
+    """Format exposure time for filename: integer seconds -> '300s'; fractional
+    or sub-second down to 1 ms -> milliseconds '500ms'; below 1 ms ->
+    microseconds '500mks' (so e.g. 0.0005 s is kept as '500mks', not lost to
+    '0ms'). mks = microseconds."""
     if exp_seconds >= 1.0:
         if exp_seconds == int(exp_seconds):
             return f"{int(exp_seconds)}s"
-        else:
-            ms = int(round(exp_seconds * 1000))
-            return f"{ms}ms"
-    else:
-        ms = int(round(exp_seconds * 1000))
-        return f"{ms}ms"
+        return f"{int(round(exp_seconds * 1000))}ms"
+    if exp_seconds >= 0.001:
+        return f"{int(round(exp_seconds * 1000))}ms"
+    return f"{int(round(exp_seconds * 1_000_000))}mks"
 
 
 # ---------------------------------------------------------
