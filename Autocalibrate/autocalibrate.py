@@ -102,7 +102,12 @@ def print_usage():
         "               - If multiple flats in interval, picks nearest within +N days\n"
         "               - If none within +N days but interval has flats, uses latest\n"
         "               - If interval empty, falls back to global search (+N days)\n"
-        "               Camera ID is matched as substring against INSTRUME header.\n\n"
+        "               Camera ID is matched as substring against INSTRUME header.\n"
+        "  --filter NAME\n"
+        "               Treat ALL lights as filter NAME, ignoring their FILTER\n"
+        "               header, for flat matching; also stamp FILTER=NAME into the\n"
+        "               output. Use when an external filter was shot but the wheel/\n"
+        "               header reported another (e.g. --filter Ha to match flat_h).\n\n"
         "rawfiles.fit : raw input spec (file, list file, or wildcard mask)\n"
         "out_path     : base output file name pattern (e.g. out.fit or path/out)\n"
         "               Result names:\n"
@@ -150,6 +155,7 @@ def parse_args(argv):
     selection = False
     flat_future_days = 2.0
     flatlog = None
+    filter_override = None
     args = argv[1:]
 
     # Parse options (can appear anywhere among arguments)
@@ -182,6 +188,15 @@ def parse_args(argv):
             flatlog = args[i + 1]
             if not os.path.isfile(flatlog):
                 print(f"ERROR: Flat log file not found: {flatlog}")
+                sys.exit(1)
+            i += 2
+        elif args[i] == "--filter":
+            if i + 1 >= len(args):
+                print("ERROR: --filter requires a value (e.g. --filter Ha)")
+                sys.exit(1)
+            filter_override = args[i + 1].strip()
+            if not filter_override:
+                print("ERROR: --filter value must be non-empty")
                 sys.exit(1)
             i += 2
         elif args[i].startswith("--"):
@@ -234,7 +249,7 @@ def parse_args(argv):
         print(f"ERROR: flat_path is not a directory: {flat_path}")
         sys.exit(1)
 
-    return raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection
+    return raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection, filter_override
 
 
 def read_list_file(path):
@@ -862,6 +877,18 @@ def choose_dark(raw_exptime, raw_jd, darks):
     )
 
 
+def _flats_for_filter(flats, name):
+    """Flats whose FILTER matches `name`. Case-sensitive exact match is preferred;
+    if none match, fall back to a case-insensitive match (so '--filter ha' finds a
+    'Ha' flat, while an exact 'Ha' still wins when both 'Ha' and 'ha' flats exist).
+    Applies to all filter matching, not just the --filter override."""
+    exact = [f for f in flats if f["filter"] == name]
+    if exact:
+        return exact
+    nl = (name or "").lower()
+    return [f for f in flats if (f["filter"] or "").lower() == nl]
+
+
 def choose_flat(raw_filter, raw_jd, flats, flat_future_days=2.0, maintenance_interval=None):
     """
     Select FLAT:
@@ -936,8 +963,8 @@ def choose_flat(raw_filter, raw_jd, flats, flat_future_days=2.0, maintenance_int
 
         return None, False
 
-    # Try exact filter match
-    exact = [f for f in flats if f["filter"] == raw_filter]
+    # Try exact filter match (case-sensitive preferred, case-insensitive fallback)
+    exact = _flats_for_filter(flats, raw_filter)
     best, from_outside = search_with_fallback(exact)
     if best is not None:
         if from_outside:
@@ -949,7 +976,7 @@ def choose_flat(raw_filter, raw_jd, flats, flat_future_days=2.0, maintenance_int
         return best, False
 
     # Try L fallback
-    l_cands = [f for f in flats if f["filter"] == "L"]
+    l_cands = _flats_for_filter(flats, "L")
     best, from_outside = search_with_fallback(l_cands)
     if best is not None:
         msg = f"WARNING: No flat for filter '{raw_filter}', using L-flat '{os.path.basename(best['path'])}'"
@@ -1174,7 +1201,7 @@ def sanitize_filter_for_name(f):
     return f or "L"
 
 
-def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None, flat_future_days=2.0, maintenance_entries=None, selection_map=None):
+def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None, flat_future_days=2.0, maintenance_entries=None, selection_map=None, filter_override=None):
     """
     Build job list.
 
@@ -1233,10 +1260,16 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
             raise RuntimeError(f"Raw '{raw_path}' has no EXPTIME/EXPOSURE.")
         exptime = float(exptime)
 
-        flt = hdr.get("FILTERS", hdr.get("FILTER"))
-        flt = (flt or "").strip()
-        if not flt:
-            flt = "L"
+        if filter_override is not None:
+            # --filter: treat every light as this filter (ignore FILTER header),
+            # so it matches the corresponding flat (e.g. an external Ha filter
+            # shot while the wheel still reported L).
+            flt = filter_override
+        else:
+            flt = hdr.get("FILTERS", hdr.get("FILTER"))
+            flt = (flt or "").strip()
+            if not flt:
+                flt = "L"
 
         dark = choose_dark(exptime, jd, darks)
         session_key = jd_to_session_key(jd)
@@ -1310,12 +1343,12 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
             group_maintenance_interval = first_info.get("maintenance_interval")
 
             # Find candidate flats for this filter
-            candidate_flats = [f for f in flats if f["filter"] == filter_name]
+            candidate_flats = _flats_for_filter(flats, filter_name)
             used_L_fallback = False
 
             if not candidate_flats:
                 # Try L fallback
-                candidate_flats = [f for f in flats if f["filter"] == "L"]
+                candidate_flats = _flats_for_filter(flats, "L")
                 if candidate_flats:
                     sys.stderr.write(
                         f"WARNING: No flats for filter '{filter_name}', trying L-flats.\n"
@@ -1417,6 +1450,7 @@ def build_jobs(raw_files, out_spec, darks, flats, bestflat=False, debug_dir=None
             "flat": flat,
             "mult": flat["mult"],
             "used_L_fallback": used_L,
+            "filter_override": filter_override,
         })
 
     return jobs
@@ -1486,6 +1520,12 @@ def process_one(job):
         header["HISTORY"] = "  FLAT L fallback used"
     header["CALIB"] = ("AUTO", "Calibrated by autocalibrate.py")
 
+    # --filter override: the light's FILTER header was wrong; stamp the forced
+    # filter into the output so it is correctly labelled downstream.
+    if job.get("filter_override"):
+        header["FILTER"] = job["filter_override"]
+        header["HISTORY"] = f"  FILTER forced to '{job['filter_override']}' via --filter"
+
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -1506,8 +1546,10 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
 
-    raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection = parse_args(argv)
+    raw_spec, out_spec, dark_path, flat_path, bestflat, debug, flat_future_days, flatlog, selection, filter_override = parse_args(argv)
 
+    if filter_override is not None:
+        print(f"Filter override: treating all lights as '{filter_override}' (ignoring FILTER header, stamped into output)")
     if selection:
         print("Mode: --selection (using manually selected flats from debug folder)")
     elif bestflat:
@@ -1559,7 +1601,7 @@ def main(argv=None):
 
     # Build jobs (per-file DARK/FLAT selection, output names)
     try:
-        jobs = build_jobs(raw_files, out_spec, darks, flats, bestflat, debug_dir, flat_future_days, maintenance_entries, selection_map)
+        jobs = build_jobs(raw_files, out_spec, darks, flats, bestflat, debug_dir, flat_future_days, maintenance_entries, selection_map, filter_override)
     except Exception as e:
         print(f"ERROR while preparing jobs: {e}")
         sys.exit(1)

@@ -369,6 +369,9 @@ autocalibrate.py [options] rawfiles.fit out_path dark_path flat_path
 - `--debug` — save previews to ./debug/ for visual flat selection verification
 - `--flat-future-days N` — max days in the future for flat search (default 2)
 - `--flatlog FILE` — CSV flat update log for strict interval-based matching
+- `--filter NAME` — treat ALL lights as filter NAME (ignoring the FILTER header) for flat matching, and stamp `FILTER=NAME` into the output. For when an external filter was shot but the header reported another (e.g. `--filter Ha` matches `flat_h`).
+
+**Filter matching**: exact (case-sensitive) first, then a case-insensitive fallback if none match (`ha` finds `Ha`; when both `Ha` and `ha` exist, the exact case wins).
 
 **Calibration formula**: `result = ((raw - dark) * MULT) / flat`
 
@@ -408,6 +411,9 @@ autocalibrate --flatlog maintenance.csv raw*.fit cal darks/ flats/
 
 # Combined options
 autocalibrate --bestflat --flat-future-days 3 --flatlog maint.csv raw*.fit out darks/ flats/
+
+# External Ha shot while header says L: treat as Ha and match flat_h
+autocalibrate M8-Ha25*.fit cal/ darks/T-10 flats/.../h --filter Ha
 ```
 
 ---
@@ -665,7 +671,7 @@ makedark.py input_spec [bias_spec]
 - `cosme<exp>.lst` — hot pixel list
 - `bias.fit` — master bias (if bias file list was specified)
 
-**Name format**: `dark300s.fit` for >= 1s, `dark500ms.fit` for < 1s
+**Name format**: `dark300s.fit` (≥1s), `dark500ms.fit` (<1s), `dark500mks.fit` (microseconds, <1ms — so 0.0005s is not lost as `0ms`)
 
 **Examples**:
 ```bash
@@ -698,12 +704,13 @@ makedark /path/to/darks bias0001.fit      # will create bias.fit from sequence
 
 **Syntax**:
 ```
-makeflat.py input_spec [target_median]
+makeflat.py input_spec [target_median] [--filter NAME]
 ```
 
 **Parameters**:
 - `input_spec` — directory OR mask OR flat sequence
 - `target_median` — optional: target median for normalization (default 5000)
+- `--filter NAME` — force ALL flats to filter NAME, ignoring the FILTER header, and stamp `FILTER=NAME` into the master. For when an external filter was shot but the wheel/header reported another (e.g. `--filter Ha` → `flat_h.fit`).
 
 **Output files** (to current directory):
 - `flat_<filter>.fit` — master flat for each filter
@@ -726,6 +733,7 @@ makeflat /path/to/flats                   # all flats from folder, median=5000
 makeflat /path/to/flats 10000             # with different target_median
 makeflat flat*.fit                        # file mask
 makeflat @list.txt 8000                   # from list
+makeflat /path/to/flats --filter Ha       # external Ha (headers say L) -> flat_h.fit, FILTER=Ha
 ```
 
 ---

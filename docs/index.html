@@ -494,7 +494,10 @@ calibrate raw0001.fit cal0001.fit -d dark.fit -f flat.fit 5000 -c cosme.lst -o</
                         <div class="param"><span class="param-name">--debug</span><span class="param-desc">сохранять превью в ./debug/ для проверки</span></div>
                         <div class="param"><span class="param-name">--flat-future-days N</span><span class="param-desc">макс. дней в будущем для flat (по умолчанию 2)</span></div>
                         <div class="param"><span class="param-name">--flatlog FILE</span><span class="param-desc">CSV-лог обновления флэтов</span></div>
+                        <div class="param"><span class="param-name">--filter NAME</span><span class="param-desc">трактовать все лайты как фильтр NAME (игнор хедера) при подборе flat и записать FILTER=NAME в выход (напр. внешняя Ha при хедере L → матчит flat_h)</span></div>
                     </div>
+
+                    <p><strong>Сопоставление фильтров:</strong> сначала точное (с регистром), затем без регистра (fallback): <code>ha</code> найдёт <code>Ha</code>; при наличии обоих точное совпадение в приоритете.</p>
 
                     <h4>Режим --bestflat</h4>
                     <ul>
@@ -526,7 +529,10 @@ autocalibrate --bestflat raw*.fit calibrated darks/ flats/
 autocalibrate --flatlog maintenance.csv raw*.fit cal darks/ flats/
 
 :: Комбинация опций
-autocalibrate --bestflat --flat-future-days 3 raw*.fit out darks/ flats/</code></pre>
+autocalibrate --bestflat --flat-future-days 3 raw*.fit out darks/ flats/
+
+:: Внешняя Ha (в хедерах L): трактовать как Ha, матчить flat_h
+autocalibrate M8-Ha25*.fit cal\ darks\T-10 flats\...\h --filter Ha</code></pre>
                 </div>
             </section>
 
@@ -655,7 +661,7 @@ noffset light0001.fit out0001.fit 10000</code></pre>
 
                     <h4>Выходные файлы</h4>
                     <ul>
-                        <li><code>dark&lt;exp&gt;.fit</code> — master dark для каждой экспозиции</li>
+                        <li><code>dark&lt;exp&gt;.fit</code> — master dark для каждой экспозиции (суффикс: <code>300s</code> / <code>500ms</code> / <code>500mks</code> — микросекунды при &lt;1мс)</li>
                         <li><code>cosme&lt;exp&gt;.lst</code> — список горячих пикселей</li>
                         <li><code>bias.fit</code> — master bias (если указан список)</li>
                     </ul>
@@ -683,8 +689,10 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>makeflat.py input_spec [target_median]</code>
+                        <code>makeflat.py input_spec [target_median] [--filter NAME]</code>
                     </div>
+
+                    <p><code>--filter NAME</code> — форсировать все флэты как NAME (игнор хедера FILTER) и записать <code>FILTER=NAME</code> в мастер. Для внешнего фильтра при «чужом» хедере (напр. Ha при хедере L → <code>flat_h.fit</code>).</p>
 
                     <h4>Выходные файлы</h4>
                     <p><code>flat_&lt;filter&gt;.fit</code> — master flat для каждого фильтра</p>
@@ -699,7 +707,8 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
                     <h4>Примеры</h4>
                     <pre><code>makeflat C:\Flats                    :: все флэты, median=5000
 makeflat C:\Flats 10000              :: с другим target_median
-makeflat flat*.fit                   :: маска файлов</code></pre>
+makeflat flat*.fit                   :: маска файлов
+makeflat C:\Flats --filter Ha        :: внешняя Ha (хедеры L) -> flat_h.fit, FILTER=Ha</code></pre>
                 </div>
             </section>
 

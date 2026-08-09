@@ -368,6 +368,9 @@ autocalibrate.py [options] rawfiles.fit out_path dark_path flat_path
 - `--debug` — сохранять превью в ./debug/ для визуальной проверки подбора flat
 - `--flat-future-days N` — макс. дней в будущем для поиска flat (по умолчанию 2)
 - `--flatlog FILE` — CSV-лог обновления флэтов для строгого подбора по интервалам
+- `--filter NAME` — трактовать ВСЕ лайты как фильтр NAME (игнорируя хедер FILTER) при подборе flat и записать `FILTER=NAME` в выход. Для случая, когда снимали внешним фильтром, а хедер писал другой (напр. `--filter Ha` → матчит `flat_h`).
+
+**Сопоставление фильтров**: сначала точное (с учётом регистра), затем — если не найдено — без учёта регистра (`ha` найдёт `Ha`; при наличии и `Ha`, и `ha` точное совпадение в приоритете).
 
 **Формула калибровки**: `result = ((raw - dark) * MULT) / flat`
 
@@ -407,6 +410,9 @@ autocalibrate --flatlog maintenance.csv raw*.fit cal darks/ flats/
 
 :: Комбинация опций
 autocalibrate --bestflat --flat-future-days 3 --flatlog maint.csv raw*.fit out darks/ flats/
+
+:: Внешняя Ha, в хедерах L: трактовать как Ha и матчить flat_h
+autocalibrate M8-Ha25*.fit cal\ darks\T-10 flats\...\h --filter Ha
 ```
 
 ---
@@ -674,7 +680,7 @@ makedark.py input_spec [bias_spec]
 - `cosme<exp>.lst` — список горячих пикселей
 - `bias.fit` — master bias (если был указан список bias-файлов)
 
-**Формат имени**: `dark300s.fit` для >= 1с, `dark500ms.fit` для < 1с
+**Формат имени**: `dark300s.fit` (≥1с), `dark500ms.fit` (<1с), `dark500mks.fit` (микросекунды, <1мс — чтобы 0.0005с не терялось как `0ms`)
 
 **Примеры**:
 ```batch
@@ -707,12 +713,13 @@ makedark C:\Darks bias0001.fit             :: создаст bias.fit из по�
 
 **Синтаксис**:
 ```
-makeflat.py input_spec [target_median]
+makeflat.py input_spec [target_median] [--filter NAME]
 ```
 
 **Параметры**:
 - `input_spec` — директория ИЛИ маска ИЛИ последовательность флэтов
 - `target_median` — опционально: целевая медиана для нормализации (по умолчанию 5000)
+- `--filter NAME` — форсировать ВСЕ флэты как фильтр NAME, игнорируя хедер FILTER, и записать `FILTER=NAME` в хедер мастера. Для случая, когда снимали внешним фильтром, а колесо/хедер писали другой (напр. `--filter Ha` → `flat_h.fit`).
 
 **Выходные файлы** (в текущую директорию):
 - `flat_<filter>.fit` — master flat для каждого фильтра
@@ -735,6 +742,7 @@ makeflat C:\Flats                          :: все флэты из папки,
 makeflat C:\Flats 10000                    :: с другим target_median
 makeflat flat*.fit                         :: маска файлов
 makeflat @list.txt 8000                    :: из списка
+makeflat C:\Flats --filter Ha              :: внешняя Ha (в хедерах L) -> flat_h.fit, FILTER=Ha
 ```
 
 ---

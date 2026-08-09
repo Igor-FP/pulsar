@@ -56,11 +56,15 @@ FILTER_CODES = {
 def usage():
     sys.stderr.write(
         "Usage:\n"
-        "  makeflat.py input_spec [target_median]\n"
+        "  makeflat.py input_spec [target_median] [--filter NAME]\n"
         "\n"
         "    input_spec     - directory OR file mask OR numbered sequence OR @list.txt\n"
         "                     containing flat frames (IMAGETYP='Flat Frame')\n"
         "    target_median  - optional: normalization target (default: 5000)\n"
+        "    --filter NAME  - force ALL flats to filter NAME, ignoring the FILTER\n"
+        "                     header, and stamp FILTER=NAME into the master. Use\n"
+        "                     when an external filter was shot but the wheel/header\n"
+        "                     reported another (e.g. --filter Ha -> flat_h.fit).\n"
         "\n"
         "Output (to current directory):\n"
         "    flat_<filter>.fit - master flat for each filter\n"
@@ -73,20 +77,45 @@ def usage():
 
 
 def parse_args(argv):
-    if len(argv) < 2 or len(argv) > 3:
+    # Pull out --filter NAME / --filter=NAME (force every flat to this filter,
+    # ignoring the FILTER header); the rest are positional as before.
+    args = argv[1:]
+    filter_override = None
+    positionals = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--filter":
+            if i + 1 >= len(args):
+                sys.stderr.write("Error: --filter requires a value (e.g. --filter Ha).\n")
+                sys.exit(1)
+            filter_override = args[i + 1].strip()
+            i += 2
+            continue
+        if a.startswith("--filter="):
+            filter_override = a.split("=", 1)[1].strip()
+            i += 1
+            continue
+        positionals.append(a)
+        i += 1
+
+    if filter_override is not None and not filter_override:
+        sys.stderr.write("Error: --filter value must be non-empty.\n")
+        sys.exit(1)
+
+    if len(positionals) < 1 or len(positionals) > 2:
         usage()
 
-    input_spec = argv[1]
+    input_spec = positionals[0]
     target_median = 5000.0
-
-    if len(argv) == 3:
+    if len(positionals) == 2:
         try:
-            target_median = float(argv[2])
+            target_median = float(positionals[1])
         except ValueError:
             sys.stderr.write("Error: target_median must be a number.\n")
             sys.exit(1)
 
-    return input_spec, target_median
+    return input_spec, target_median, filter_override
 
 
 def expand_input_to_files(spec):
@@ -142,16 +171,21 @@ def get_filter_code(filter_name):
     return trimmed
 
 
-def group_by_filter(files):
-    """Group files by FILTER header (trimmed)."""
+def group_by_filter(files, filter_override=None):
+    """Group files by FILTER header (trimmed). If filter_override is set, force
+    ALL files into that single filter, ignoring the FILTER header (e.g. an
+    external filter shot while the wheel still reported a different one)."""
     groups = {}
     for f in files:
         try:
-            filter_val = get_header_value(f, "FILTER")
-            if filter_val is None:
-                filter_val = "NoFilter"
+            if filter_override is not None:
+                filter_val = filter_override
             else:
-                filter_val = filter_val.strip()
+                filter_val = get_header_value(f, "FILTER")
+                if filter_val is None:
+                    filter_val = "NoFilter"
+                else:
+                    filter_val = filter_val.strip()
 
             exp = get_header_value(f, "EXPTIME", "EXPOSURE")
             if exp is None:
@@ -183,16 +217,17 @@ def validate_exposure_consistency(groups):
 
 
 def format_exposure_suffix(exp_seconds):
-    """Format exposure time for filename."""
+    """Format exposure time for filename: integer seconds -> '300s'; fractional
+    or sub-second down to 1 ms -> milliseconds '500ms'; below 1 ms ->
+    microseconds '500mks' (so e.g. 0.0005 s is kept as '500mks', not lost to
+    '0ms'). Must stay identical to makedark.py's copy. mks = microseconds."""
     if exp_seconds >= 1.0:
         if exp_seconds == int(exp_seconds):
             return f"{int(exp_seconds)}s"
-        else:
-            ms = int(round(exp_seconds * 1000))
-            return f"{ms}ms"
-    else:
-        ms = int(round(exp_seconds * 1000))
-        return f"{ms}ms"
+        return f"{int(round(exp_seconds * 1000))}ms"
+    if exp_seconds >= 0.001:
+        return f"{int(round(exp_seconds * 1000))}ms"
+    return f"{int(round(exp_seconds * 1_000_000))}mks"
 
 
 def find_dark_and_cosme(exp_seconds, search_dirs):
@@ -365,7 +400,8 @@ def run_makedark(input_dir):
 
 
 def process_filter_group(filter_name, files, exp_seconds, dark_path, cosme_path,
-                         target_median, temp_dir, max_workers=None):
+                         target_median, temp_dir, max_workers=None,
+                         write_filter_header=False):
     """Process a group of flat files for one filter using threading."""
     filter_code = get_filter_code(filter_name)
     output_flat = os.path.join(os.getcwd(), f"flat_{filter_code}.fit")
@@ -424,6 +460,14 @@ def process_filter_group(filter_name, files, exp_seconds, dark_path, cosme_path,
     cosme_coords = read_cosme_list(cosme_path)
     apply_cosme(temp_median, output_flat, cosme_coords)
 
+    # With --filter override, the inputs' FILTER header is wrong; stamp the
+    # forced filter into the master so calibration and records match.
+    if write_filter_header:
+        with fits.open(output_flat, mode="update", memmap=False) as hdul:
+            hdul[0].header["FILTER"] = filter_name
+            hdul[0].header["HISTORY"] = f"makeflat.py: FILTER forced to '{filter_name}' via --filter"
+            hdul.flush()
+
     # Clean up temp files
     for f in dark_sub_files + norm_files + [temp_median]:
         if os.path.exists(f):
@@ -433,7 +477,7 @@ def process_filter_group(filter_name, files, exp_seconds, dark_path, cosme_path,
 
 
 def main():
-    input_spec, target_median = parse_args(sys.argv)
+    input_spec, target_median, filter_override = parse_args(sys.argv)
 
     try:
         all_files, input_dir = expand_input_to_files(input_spec)
@@ -451,7 +495,9 @@ def main():
 
     sys.stderr.write(f"Found {len(flat_files)} flat frames.\n")
 
-    groups = group_by_filter(flat_files)
+    if filter_override is not None:
+        sys.stderr.write(f"Filter override: forcing all flats to '{filter_override}' (ignoring FILTER header).\n")
+    groups = group_by_filter(flat_files, filter_override)
     if not groups:
         sys.stderr.write("Error: no valid flat frames found.\n")
         sys.exit(1)
@@ -524,7 +570,8 @@ def main():
             files = [f for f, _ in file_exp_list]
 
             process_filter_group(filter_name, files, exp, dark_path, cosme_path,
-                                 target_median, temp_dir)
+                                 target_median, temp_dir,
+                                 write_filter_header=(filter_override is not None))
             processed += 1
 
     finally:
