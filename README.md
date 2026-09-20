@@ -53,6 +53,7 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 
 ### Alignment
 - Star-based registration with geometric descriptor matching, RANSAC, and TPS
+- Comet-nucleus alignment of a star-aligned sequence (interactive mark + time-linear shift)
 - WCS astrometric solving and tangent-plane reprojection (or reuse of an embedded/prior WCS to skip re-solving)
 - FFT-based alignment with rotation and scale search
 - Chromatic aberration correction (R/B channel alignment to G)
@@ -70,6 +71,7 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 - Max-SNR super-luminance (inverse-variance blend of L with synthetic R+G+B)
 - Color preservation through HSL and luminance-ratio methods, with optional background desaturation
 - RGB color balance by star photometry
+- Mask making: black/white clip + stretch (percentile or absolute), morphological grow/shrink, inversion
 - Bayer demosaicing, pixel binning, cropping
 
 ### Conversion
@@ -232,6 +234,7 @@ autosolve --rectify --align *.fit aligned\
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **mtf.py** | Nonlinear brightness stretch with auto levels |
+| **makemask.py** | Build processing masks (percentile/absolute black-white clip + stretch, grow/shrink, invert) |
 | **lrgb.py** | Combine luminance channel with RGB color |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 

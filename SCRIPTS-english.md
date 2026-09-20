@@ -40,11 +40,13 @@ A toolkit for batch processing of astronomical FITS images.
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
 | **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
+| **makemask.py** | Mask making: greyscale, black/white clip (percentile or absolute) + stretch, morphological grow/shrink, invert |
 | **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
 | **rgb.py** | Merge/split RGB channels (3 mono ↔ 1 RGB FITS) |
 | **staralign.py** | Star-based image registration (Automatic, Thin Plate Spline) |
+| **cometalign.py** | Comet-nucleus alignment of a star-aligned sequence (interactive mark of first/last frame + time-linear shift) |
 | **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
 
 ---
@@ -1545,6 +1547,56 @@ mtf stretched.fit linear.fit --inverse
 
 ---
 
+### makemask.py
+
+**Purpose**: Build processing masks from FITS images.
+
+Optional pipeline, applied in this order:
+1. colour -> greyscale via `g = (R + 2*G + B) / 4` (only for 3-channel input)
+2. black/white clip + linear stretch (`--black` / `--white`). Each endpoint is given in ONE of two modes:
+   - **percentile** - with a trailing `%` sign (0..100): the endpoint sits at that brightness percentile of the frame. E.g. `--white 90%` puts white at the 90th percentile (the brightest 10% saturate to white).
+   - **absolute brightness** - without `%`: a 0..1 value read as a fraction of the format's full scale. Full scale is the dtype maximum for integer frames (65535 for uint16, 255 for uint8, ...) and 1.0 for float. E.g. `--black 0.01` is 0.01 on a float frame and `0.01*65535` on a uint16 frame.
+
+   The two modes may be **mixed** (e.g. `--black 1% --white 0.95`). Both endpoints are computed on the ORIGINAL frame, BEFORE the stretch, which then maps [black_level, white_level] onto the full output range (integer: [0, dtype max]; float: [0, 1]). White, like black, is measured from 0 (an absolute level, not "the top X %"). The defaults are `--black 0 --white 1` (absolute): a true no-op, the frame is unchanged. The form `--black 0% --white 100%` also clips nothing, but it stretches the frame's actual min/max onto the full range (a min-max normalization) - identical to the input only when the frame already spans the full range. Giving either endpoint is enough; the other falls back to its default. The resolved black level must be strictly below white, otherwise an error is raised.
+3. morphological grow/shrink by a circular aperture (`--grow R`): R>0 dilates (stars grow, max filter), R<0 erodes (min filter); applied BEFORE inversion
+4. inversion (`--invert`): negative image, done last
+
+Output is always single-channel. The input dtype is preserved.
+
+**Syntax**:
+```
+makemask.py input_spec output_spec [options]
+```
+
+**Parameters**:
+- `input_spec` - single file, wildcard (*.fit), numbered, or @list.txt
+- `output_spec` - single file, numbered pattern, or directory
+- `--black LEVEL` - black point (maps to 0). Two modes: `90%` - percentile (0..100); `0.01` - absolute brightness, a fraction of full scale (0..1)
+- `--white LEVEL` - white point (maps to full scale), same two modes. Giving either enables the stretch; the missing side defaults to black `0` / white `1`. Modes may be mixed. Requires resolved black < white.
+- `--grow R` - circular aperture radius (px): R>0 grows (max), R<0 shrinks (min); before inversion
+- `--invert` - negative image (done last)
+
+**Examples**:
+```bash
+# Mixed: black at absolute 0.01 (=0.01*full scale), white at the 90th percentile (brightest 10% -> white)
+makemask src.fit mask.fit --black 0.01 --white 90%
+
+# Mixed: black at the 1st percentile, white at absolute 0.95 of full scale
+makemask src.fit mask.fit --black 1% --white 0.95
+
+# Star mask: isolate bright by percentile, grow, invert (protect the background)
+makemask light.fit starmask.fit --black 92% --white 99.8% --grow 3 --invert
+
+# Colour frame -> grey mask
+makemask rgb.fit mask.fit --black 50% --white 99%
+```
+
+**Note for float frames**: in absolute mode float full scale is taken as 1.0. For linear float frames with an arbitrary range use percentile mode (`--black 1% --white 99%`), not absolute fractions.
+
+**Dependencies**: scipy (morphology).
+
+---
+
 ### rgbbalance.py
 
 **Purpose**: RGB color balance and brightness normalization for color FITS.
@@ -1663,6 +1715,66 @@ lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
 lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
 lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 lrgb --auto L.fit R.fit G.fit B.fit result.fit
+```
+
+---
+
+### cometalign.py
+
+**Purpose**: Re-align a star-aligned FITS sequence onto a comet's nucleus.
+
+Input frames are already registered on the stars (shared pixel grid). In a
+pygame view you mark the comet nucleus on the FIRST and LAST frames (by capture
+time); every frame is then shifted by a time-linear interpolation of the comet's
+motion, so the comet stays fixed and the stars trail - ready to stack into a
+comet-locked image.
+
+**Syntax**:
+```
+cometalign.py input_spec output_spec [options]
+```
+
+**Parameters**:
+- `input_spec` - star-aligned frames (wildcard, numbered, or @list.txt)
+- `output_spec` - single file, numbered pattern, or directory
+- `--start X Y` / `--stop X Y` - comet nucleus (px) on the earliest / latest
+  frame. Give BOTH to skip the GUI (you guarantee the coords belong to the
+  first/last frame by time).
+- `--ref first|last` - frame the comet is parked on (default `first`)
+- `--mtf M` - initial display midtones (default 0.05, smaller = brighter; GUI)
+- `--fill V` - value for out-of-footprint pixels after the shift (default 0)
+
+**GUI controls** (also shown as text in the status bar):
+
+| Key | Action |
+|-----|--------|
+| Left click | place the comet crosshair on the current frame |
+| Tab | toggle FIRST / LAST frame (pan/zoom kept) |
+| Arrows | pan the view (Shift = faster) |
+| +/- or wheel | zoom in / out (wheel zooms at the cursor) |
+| Home/End | display brighter / darker (MTF) |
+| Enter | confirm (both crosshairs set) and close |
+| Q/Escape | cancel (writes nothing) |
+
+**How it works**: times come from the header (`JD` -> `MJD-OBS` -> `DATE-OBS`).
+With marks `p0` (first, `t0`) and `p1` (last, `t1`), each frame at time `ti` is
+shifted by `ref - (p0 + f*(p1-p0))`, `f = (ti-t0)/(t1-t0)`, via cubic subpixel
+resampling; out-of-footprint pixels get `--fill`. The marks are saved to a
+`*.cometpts.csv` sidecar and printed as a ready `--start/--stop` line for
+reproducible re-runs.
+
+**Dependencies**: pygame (interactive mode), scipy (subpixel shift).
+
+**Examples**:
+```bash
+# Interactive: click the nucleus on the first frame, Tab, on the last, Enter
+cometalign aligned*.fit comet/c0001.fit
+
+# Headless (coords given manually)
+cometalign aligned*.fit comet/c0001.fit --start 1520 980 --stop 1495 1012
+
+# Comet fixed relative to the last frame
+cometalign aligned*.fit comet/c0001.fit --ref last
 ```
 
 ---

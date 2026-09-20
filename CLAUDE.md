@@ -89,15 +89,17 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | hotfix.py | Remove single hot (and cold) pixels |
 | lrgb.py | LRGB luminance layering (HSL and ratio methods; optional SNR² super-luminance blend, R+G+B combine, background desaturation) |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
+| makemask.py | Build processing masks: colour->grey (R+2G+B)/4, black/white clip + stretch (each endpoint percentile `90%` or absolute `0.01` = fraction of full scale; mixable), morphological grow/shrink (min/max aperture), invert; mono output |
 | rgbbalance.py | RGB color balance and brightness normalization |
 | stack.py | Optimal weighted stacking with sigma-fade clipping |
 | staralign.py | Star-based image registration (pentagon descriptors, TPS) |
+| cometalign.py | Comet-nucleus alignment of a star-aligned sequence (interactive mark of comet on first/last frame, then time-linear per-frame shift; pygame GUI, or --start/--stop headless) |
 
 ## Dependencies
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance), pygame (cometalign.py interactive GUI)
 
 ## Running Tools
 

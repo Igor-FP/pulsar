@@ -91,6 +91,7 @@
                 <div class="nav-section-title">Обработка</div>
                 <ul>
                     <li><a href="#mtf">mtf.py</a></li>
+                    <li><a href="#makemask">makemask.py</a></li>
                     <li><a href="#lrgb">lrgb.py</a></li>
                     <li><a href="#rgbbalance">rgbbalance.py</a></li>
                     <li><a href="#rgb">rgb.py</a></li>
@@ -103,6 +104,7 @@
                     <li><a href="#autosolve">autosolve.py</a></li>
                     <li><a href="#fft_align">fft_align.py</a></li>
                     <li><a href="#staralign">staralign.py</a></li>
+                    <li><a href="#cometalign">cometalign.py</a></li>
                     <li><a href="#sortfits">sortfits.py</a></li>
                 </ul>
             </div>
@@ -150,10 +152,12 @@
                         <tr><td>stack.py</td><td>Оптимальное взвешенное сложение с sigma-fade</td></tr>
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
                         <tr><td>mtf.py</td><td>Midtone Transfer Function с auto black/white</td></tr>
+                        <tr><td>makemask.py</td><td>Создание масок (обрезка перцентиль/абсолют + стретч, наращивание, инверсия)</td></tr>
                         <tr><td>rgbbalance.py</td><td>Баланс цвета и яркости RGB</td></tr>
                         <tr><td>rgb.py</td><td>Сборка/разделение RGB каналов</td></tr>
                         <tr><td>hotfix.py</td><td>Удаление горячих и холодных пикселей</td></tr>
                         <tr><td>staralign.py</td><td>Выравнивание по звёздам (TPS)</td></tr>
+                        <tr><td>cometalign.py</td><td>Выравнивание серии по ядру кометы</td></tr>
                         <tr><td>bestof.py</td><td>Отбор лучших кадров по FWHM/SNR</td></tr>
                         <tr><td>crop.py</td><td>Обрезка FITS-изображений</td></tr>
                         <tr><td>binxy.py</td><td>Программный биннинг 2×2 / 4×4</td></tr>
@@ -172,7 +176,7 @@
 
                 <h4>Зависимости</h4>
                 <p><strong>Обязательные:</strong> Python 3.6+, numpy, astropy</p>
-                <p><strong>Дополнительные:</strong> scipy (fft_align, autoflat), reproject (autosolve), astrometry.net, Pillow (fits2tiff, autosolve JPEG вход/выход)</p>
+                <p><strong>Дополнительные:</strong> scipy (fft_align, autoflat), reproject (autosolve), astrometry.net, Pillow (fits2tiff, autosolve JPEG вход/выход), pygame (cometalign GUI)</p>
 
                 <h4>Настройка</h4>
                 <p><strong>Windows:</strong> запустите <code>setup.bat</code> в корне проекта — он проверит Python, установит зависимости и добавит команды в PATH.</p>
@@ -980,6 +984,64 @@ mtf img.fit out.fit 0.01 --keepcolor-hsl --auto
 mtf img.fit out.fit --median 0.25 --auto
 mtf aligned.fit out.fit --median 0.25 --auto --zero
 mtf stretched.fit linear.fit --inverse</code></pre>
+                </div>
+            </section>
+
+            <section id="makemask">
+                <div class="script-card">
+                    <h3>makemask.py <span class="badge">обработка</span></h3>
+                    <p>Создание масок для обработки. Опциональный конвейер: цветное -&gt; ЧБ <code>(R+2G+B)/4</code>, обрезка чёрной/белой точки со стретчем, наращивание/сужение звёзд, инверсия. Выход всегда одноканальный.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>makemask.py input_spec output_spec [--black LEVEL] [--white LEVEL] [--grow R] [--invert]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--black LEVEL</span><span class="param-desc">чёрная точка (уходит в 0). Два режима: <code>90%</code> - перцентиль яркости (0..100); <code>0.01</code> - абсолютная яркость, доля насыщения формата (0..1)</span></div>
+                        <div class="param"><span class="param-name">--white LEVEL</span><span class="param-desc">белая точка (уходит в насыщение), те же два режима. Любая граница включает стретч, недостающая = чёрная <code>0</code> / белая <code>1</code>. Режимы можно смешивать; нужно чёрная&lt;белой</span></div>
+                        <div class="param"><span class="param-name">--grow R</span><span class="param-desc">круговая апертура радиуса R px: R&gt;0 наращивает (max), R&lt;0 сужает (min); до инверсии</span></div>
+                        <div class="param"><span class="param-name">--invert</span><span class="param-desc">негатив (последним шагом)</span></div>
+                    </div>
+
+                    <p>Насыщение формата = максимум типа данных для целых (65535 для uint16) и 1.0 для float. Так, <code>--black 0.01</code> = 0.01 на float-кадре и <code>0.01*65535</code> на uint16. Обе границы считаются по исходному кадру ДО стретча, инверсия - последней. Значения по умолчанию <code>--black 0 --white 1</code> - истинный no-op (кадр не меняется); <code>--black 0% --white 100%</code> ничего не обрезает, но делает min-max нормализацию на весь диапазон. Тип данных сохраняется.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>makemask src.fit mask.fit --black 0.01 --white 90%   # чёрная абс. 0.01, белая 90-й перцентиль
+makemask src.fit mask.fit --black 1% --white 0.95    # чёрная 1-й перцентиль, белая абс. 0.95
+makemask light.fit starmask.fit --black 92% --white 99.8% --grow 3 --invert
+makemask rgb.fit mask.fit --black 50% --white 99%</code></pre>
+                </div>
+            </section>
+
+            <section id="cometalign">
+                <div class="script-card">
+                    <h3>cometalign.py <span class="badge">выравнивание</span></h3>
+                    <p>Выравнивание уже-выровненной-по-звёздам серии по ядру кометы: комета остаётся неподвижной, звёзды смещаются (для стекинга с резкой кометой).</p>
+
+                    <p>В pygame-окне отмечаете ядро кометы на ПЕРВОМ и ПОСЛЕДНЕМ кадрах (по времени съёмки); каждый кадр сдвигается по линейной интерполяции движения кометы во времени.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>cometalign.py input_spec output_spec [--start X Y --stop X Y] [--ref first|last] [--mtf M] [--fill V]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--start X Y / --stop X Y</span><span class="param-desc">ядро кометы (px) на самом раннем / самом позднем кадре; оба заданы -&gt; GUI пропускается</span></div>
+                        <div class="param"><span class="param-name">--ref first|last</span><span class="param-desc">на каком кадре комета неподвижна (по умолчанию first)</span></div>
+                        <div class="param"><span class="param-name">--mtf M</span><span class="param-desc">начальный стретч отображения (по умолчанию 0.05; только GUI)</span></div>
+                        <div class="param"><span class="param-name">--fill V</span><span class="param-desc">значение пикселей вне футпринта после сдвига (по умолчанию 0)</span></div>
+                    </div>
+
+                    <h4>Управление GUI</h4>
+                    <p>ЛКМ - крестик на ядро | Tab - переключить кадр | стрелки - двигать | +/- или колесо - зум | Home/End - ярче/темнее | Enter - подтвердить | Q/Esc - отмена. Хоткеи также показаны текстом в строке статуса.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>cometalign aligned*.fit comet\c0001.fit
+cometalign aligned*.fit comet\c0001.fit --start 1520 980 --stop 1495 1012</code></pre>
+                    <p><strong>Зависимости:</strong> pygame (GUI), scipy (сдвиг).</p>
                 </div>
             </section>
 
