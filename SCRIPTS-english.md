@@ -41,6 +41,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
 | **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
 | **makemask.py** | Mask making: greyscale, black/white clip (percentile or absolute) + stretch, morphological grow/shrink, invert |
+| **blend.py** | Combine two images through an opacity mask: out = source*(1-m) + operand*m; --mtf, --invert |
 | **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
@@ -1594,6 +1595,55 @@ makemask rgb.fit mask.fit --black 50% --white 99%
 **Note for float frames**: in absolute mode float full scale is taken as 1.0. For linear float frames with an arbitrary range use percentile mode (`--black 1% --white 99%`), not absolute fractions.
 
 **Dependencies**: scipy (morphology).
+
+---
+
+### blend.py
+
+**Purpose**: Combine two FITS images through an opacity mask.
+
+The mask is a greyscale image whose value is the OPACITY of the operand at each pixel. With the normalized mask m in [0, 1]:
+
+```
+output = source * (1 - m) + operand * m
+```
+- white mask pixel (m = 1) -> output = operand
+- black mask pixel (m = 0) -> output = source
+- grey mask pixel (m = 0.5) -> arithmetic mean of source and operand
+
+Mask normalization: scaled to [0, 1] by its OWN full scale - the dtype maximum for integer masks (65535 for uint16, 255 for uint8, ...) and 1.0 for float masks (a float mask must already be in [0, 1]). A colour mask is reduced to grey with `(R + 2*G + B) / 4`; non-finite pixels map to 0 (fully source).
+
+**Syntax**:
+```
+blend.py source output mask operand [--mtf [K]] [--invert]
+```
+
+**Parameters**:
+- `source` - base image(s): single file, wildcard (*.fit), numbered, or @list.txt
+- `output` - single file, numbered pattern, or directory
+- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant.
+- `operand` - image blended in where the mask is bright: a FITS file, a matching sequence, or a numeric constant (flat level)
+- `--mtf [K]` - apply the MTF (midtone transfer function) to the mask in [0,1] BEFORE blending and BEFORE `--invert`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 brightens the mask (more operand), K>0.5 darkens it (more source). K defaults to 0.25 when omitted.
+- `--invert` - use the inverted mask (m -> 1 - m); applied AFTER `--mtf`
+
+**Examples**:
+```bash
+# Blend stars.fit over base.fit where mask.fit is bright
+blend base.fit out.fit mask.fit stars.fit
+
+# Fade the masked regions toward 0 (operand = constant 0)
+blend base.fit out.fit mask.fit 0
+
+# Brighten the mask midtones before blending (more of hi.fit)
+blend base.fit out.fit mask.fit hi.fit --mtf 0.2
+
+# Blend where the mask is DARK instead of bright
+blend base.fit out.fit mask.fit hi.fit --invert
+```
+
+`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
+
+**Dependencies**: numpy/astropy only (batch_utils).
 
 ---
 

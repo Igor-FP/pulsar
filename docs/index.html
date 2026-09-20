@@ -92,6 +92,7 @@
                 <ul>
                     <li><a href="#mtf">mtf.py</a></li>
                     <li><a href="#makemask">makemask.py</a></li>
+                    <li><a href="#blend">blend.py</a></li>
                     <li><a href="#lrgb">lrgb.py</a></li>
                     <li><a href="#rgbbalance">rgbbalance.py</a></li>
                     <li><a href="#rgb">rgb.py</a></li>
@@ -153,6 +154,7 @@
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
                         <tr><td>mtf.py</td><td>Midtone Transfer Function с auto black/white</td></tr>
                         <tr><td>makemask.py</td><td>Создание масок (обрезка перцентиль/абсолют + стретч, наращивание, инверсия)</td></tr>
+                        <tr><td>blend.py</td><td>Совмещение по маске непрозрачности (out = source*(1-m) + operand*m; --mtf, --invert)</td></tr>
                         <tr><td>rgbbalance.py</td><td>Баланс цвета и яркости RGB</td></tr>
                         <tr><td>rgb.py</td><td>Сборка/разделение RGB каналов</td></tr>
                         <tr><td>hotfix.py</td><td>Удаление горячих и холодных пикселей</td></tr>
@@ -1012,6 +1014,35 @@ mtf stretched.fit linear.fit --inverse</code></pre>
 makemask src.fit mask.fit --black 1% --white 0.95    # чёрная 1-й перцентиль, белая абс. 0.95
 makemask light.fit starmask.fit --black 92% --white 99.8% --grow 3 --invert
 makemask rgb.fit mask.fit --black 50% --white 99%</code></pre>
+                </div>
+            </section>
+
+            <section id="blend">
+                <div class="script-card">
+                    <h3>blend.py <span class="badge">обработка</span></h3>
+                    <p>Совмещение двух изображений по маске непрозрачности: <code>output = source*(1-m) + operand*m</code>. Белый пиксель маски -&gt; операнд, чёрный -&gt; исходник, серый -&gt; среднее. Маска нормируется в [0,1] по своему полному диапазону (max типа для целых, 1.0 для float); цветная маска -&gt; серое <code>(R+2G+B)/4</code>.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>blend.py source output mask operand [--mtf [K]] [--invert]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">source / output</span><span class="param-desc">базовое изображение(я) и выход; стандартные шаблоны (файл, *.fit, нумерованные, @list.txt)</span></div>
+                        <div class="param"><span class="param-name">mask</span><span class="param-desc">полутоновая маска непрозрачности (FITS-файл или последовательность по числу кадров); НЕ константа</span></div>
+                        <div class="param"><span class="param-name">operand</span><span class="param-desc">подмешиваемое изображение (файл/последовательность) или числовая константа (ровный уровень)</span></div>
+                        <div class="param"><span class="param-name">--mtf [K]</span><span class="param-desc">применить MTF к маске в [0,1] до совмещения и до инверсии; K как в mtf.py (0&lt;K&lt;1), по умолчанию 0.25</span></div>
+                        <div class="param"><span class="param-name">--invert</span><span class="param-desc">инвертировать маску (m -&gt; 1-m); после --mtf</span></div>
+                    </div>
+
+                    <p>source и operand должны совпадать по форме и шкале данных; выход сохраняет тип и заголовок source. Поддержаны 2D и 3-канальные изображения (моно-маска транслируется на каналы). Если операнд - числовая константа, задавайте K для --mtf явно, чтобы он не был принят за K.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>blend base.fit out.fit mask.fit stars.fit         # подмешать stars там, где маска светлая
+blend base.fit out.fit mask.fit 0                 # притушить замаскированное к 0
+blend base.fit out.fit mask.fit hi.fit --mtf 0.2  # осветлить полутона маски
+blend base.fit out.fit mask.fit hi.fit --invert   # совмещать по тёмной части маски</code></pre>
                 </div>
             </section>
 
