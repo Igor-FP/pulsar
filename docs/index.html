@@ -849,6 +849,31 @@ autoflat --minbin flat0001.fit corrected0001.fit</code></pre>
                 </div>
             </section>
 
+            <section id="hotfix">
+                <div class="script-card">
+                    <h3>hotfix.py <span class="badge">обработка</span></h3>
+                    <p>Удаление одиночных горячих (и холодных) пикселей. Для каждого пикселя берёт среднее и СКО 8 соседей; если пиксель выше <code>mean + N*sigma</code>, заменяет его средним соседей. Звёзды сохраняются (их PSF занимает несколько пикселей). Полностью векторизован; 2D и 3D.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>hotfix input_spec output_spec [--sigma N] [--floor N] [--cold] [--debug]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--sigma N</span><span class="param-desc">порог обнаружения в СКО (по умолчанию 5)</span></div>
+                        <div class="param"><span class="param-name">--floor N</span><span class="param-desc">минимальный уровень шума в ADU (по умолчанию auto)</span></div>
+                        <div class="param"><span class="param-name">--cold</span><span class="param-desc">также исправлять холодные (мёртвые) пиксели ниже mean - N*sigma</span></div>
+                        <div class="param"><span class="param-name">--debug</span><span class="param-desc">диагностический вывод для первого файла</span></div>
+                    </div>
+
+                    <h4>Примеры</h4>
+                    <pre><code>hotfix img0001.fit out0001.fit           :: 5 sigma, только горячие
+hotfix *.fit fixed/ --sigma 7            :: строже порог
+hotfix img0001.fit out0001.fit --sigma 4 --cold</code></pre>
+                </div>
+            </section>
+
             <!-- Alignment -->
             <section id="autosolve">
                 <h2>Выравнивание</h2>
@@ -1057,6 +1082,35 @@ blend base.fit out.fit mask.fit hi.fit --invert   # совмещать по тё
                 </div>
             </section>
 
+            <section id="staralign">
+                <div class="script-card">
+                    <h3>staralign.py <span class="badge">выравнивание</span></h3>
+                    <p>Выравнивание кадров по звёздам с субпиксельной точностью: масштаб, поворот, отражение и нелинейные искажения (TPS). Работает кросс-фильтрово (например, Ha по R-референсу). Без <code>--ref</code> — на первый кадр; для одного файла или <code>--rgb</code> — коррекция хроматизма (каналы R и B по G).</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>staralign input_spec output_spec [--ref reference.fit] [options]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры (основные)</h4>
+                        <div class="param"><span class="param-name">--ref FILE</span><span class="param-desc">референсный кадр (по умолчанию первый входной)</span></div>
+                        <div class="param"><span class="param-name">--model tps|projective</span><span class="param-desc">модель регистрации (по умолчанию tps)</span></div>
+                        <div class="param"><span class="param-name">--smoothness F</span><span class="param-desc">гладкость TPS, 0 = точная интерполяция (по умолчанию 0.25)</span></div>
+                        <div class="param"><span class="param-name">--snr F</span><span class="param-desc">порог SNR детекции звёзд (по умолчанию 5)</span></div>
+                        <div class="param"><span class="param-name">--hash-tol F</span><span class="param-desc">толеранс хешей пентагонов; 0.1-0.15 для кросс-фильтра (по умолчанию 0.05)</span></div>
+                        <div class="param"><span class="param-name">--rgb</span><span class="param-desc">коррекция хроматизма для каждого файла (каналы R, B по G)</span></div>
+                    </div>
+
+                    <p>Полный список параметров сопоставления, детекции и RANSAC — в SCRIPTS.md.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>staralign *.fit out0001.fit                 :: на первый кадр
+staralign *.fit out0001.fit --ref ref.fit   :: на заданный референс
+staralign color.fit corrected.fit           :: коррекция хроматизма</code></pre>
+                </div>
+            </section>
+
             <section id="cometalign">
                 <div class="script-card">
                     <h3>cometalign.py <span class="badge">выравнивание</span></h3>
@@ -1122,6 +1176,54 @@ lrgb L.fit RGB.fit result.fit --method hsl --saturation 1.3
 lrgb L.fit R.fit G.fit B.fit result.fit --superlum --bg-desat 3
 lrgb L.fit R.fit G.fit B.fit result.fit --superlum --dry-run
 lrgb --auto L.fit R.fit G.fit B.fit result.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="rgbbalance">
+                <div class="script-card">
+                    <h3>rgbbalance.py <span class="badge">обработка</span></h3>
+                    <p>Баланс цвета и яркости для цветных RGB FITS (3xH×W): нейтрализация фона, баланс белого (авто / ручной / по звёздам), нормализация яркости в серии кадров.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>rgbbalance input_spec output_spec [options]</code>
+                    </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--auto [file]</span><span class="param-desc">авто баланс белого: масштаб R и B к диапазону G (эталон из file или первого входа)</span></div>
+                        <div class="param"><span class="param-name">--autoeach</span><span class="param-desc">авто баланс белого независимо для каждого файла</span></div>
+                        <div class="param"><span class="param-name">--autostar [file]</span><span class="param-desc">баланс белого по звёздам (фотометрия G/R/B); точнее для узко/широкополосных миксов</span></div>
+                        <div class="param"><span class="param-name">--rgb R G B</span><span class="param-desc">ручные коэффициенты масштабирования каналов</span></div>
+                        <div class="param"><span class="param-name">--warmth W</span><span class="param-desc">сдвиг цветовой температуры по кривой Планка (-1..+1, по умолчанию 0)</span></div>
+                        <div class="param"><span class="param-name">--kmin N / --kmax N</span><span class="param-desc">% тёмных / ярких пикселей для оценки чёрного / белого уровня (по умолчанию 5)</span></div>
+                    </div>
+
+                    <p><code>--rgb</code>, <code>--auto</code>, <code>--autoeach</code>, <code>--autostar</code> взаимоисключающие; без них — только нейтрализация фона и нормализация яркости.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>rgbbalance img0001.fit out0001.fit --auto
+rgbbalance img0001.fit out0001.fit --autostar
+rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5</code></pre>
+                </div>
+            </section>
+
+            <section id="rgb">
+                <div class="script-card">
+                    <h3>rgb.py <span class="badge">обработка</span></h3>
+                    <p>Объединение / разделение RGB каналов. Merge: 3 монохромных 2D FITS (R, G, B) → один 3-канальный RGB (3, H, W). Split: RGB (3, H, W) → 3 монохромных FITS с FILTER = R/G/B в хидере.</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>rgb --merge inR inG inB --out outRGB  |  rgb --split inRGB --out outR outG outB</code>
+                    </div>
+
+                    <p>Все файловые аргументы поддерживают стандартные спецификации (файл, маска, нумерованные, @list.txt); для merge три входа должны иметь одинаковое число файлов.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>rgb --merge r.fit g.fit b.fit --out rgb.fit
+rgb --merge r0001.fit g0001.fit b0001.fit --out rgb0001.fit
+rgb --split rgb.fit --out r.fit g.fit b.fit</code></pre>
                 </div>
             </section>
 
