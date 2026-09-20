@@ -72,7 +72,8 @@ The project is inspired by **[IRIS](http://www.astrosurf.com/buil/us/iris/iris.h
 - Color preservation through HSL and luminance-ratio methods, with optional background desaturation
 - RGB color balance by star photometry
 - Mask making: black/white clip + stretch (percentile or absolute), morphological grow/shrink, inversion
-- Bayer demosaicing, pixel binning, cropping
+- Mask-based blending of two images (opacity mask, optional MTF-shaped or inverted)
+- Bayer demosaicing, pixel binning, cropping, axis flip/mirror
 
 ### Conversion
 - Camera RAW to FITS (Canon CR2/CR3) with EXIF mapping and Bayer CFA preservation
@@ -231,10 +232,12 @@ autosolve --rectify --align *.fit aligned\
 | **absession.py** | AstroBin acquisition session CSV |
 | **binxy.py** | Software 2×2 / 4×4 pixel binning |
 | **crop.py** | Crop FITS images (by size/center or margins) |
+| **flip.py** | Mirror/flip along X/Y axes (flip-Y: Ynew=H-Y-1 top/bottom; flip-X: Xnew=W-X-1 left/right) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **mtf.py** | Nonlinear brightness stretch with auto levels |
 | **makemask.py** | Build processing masks (percentile/absolute black-white clip + stretch, grow/shrink, invert) |
+| **blend.py** | Combine two images through an opacity mask (out = source*(1-m) + operand*m; --mtf, --invert) |
 | **lrgb.py** | Combine luminance channel with RGB color |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 
@@ -313,6 +316,7 @@ PULSAR/
 ├── Absession/         # absession.py
 ├── Binxy/             # binxy.py
 ├── Crop/              # crop.py
+├── Flip/              # flip.py
 ├── Debayer/           # debayer.py
 ├── Hotfix/            # hotfix.py
 ├── Mtf/               # mtf.py

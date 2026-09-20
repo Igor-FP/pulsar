@@ -85,11 +85,13 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | absession.py | AstroBin acquisition session CSV generator |
 | binxy.py | Software 2×2 / 4×4 pixel binning |
 | crop.py | Crop FITS images (by size/center or margins) |
+| flip.py | Mirror/flip along axes: --y reverses Y (Ynew=H-Y-1, top<->bottom), --x reverses X (Xnew=W-X-1, left<->right); combinable (=180 rot), values/dtype preserved, WCS not adjusted |
 | debayer.py | Demosaic Bayer-pattern FITS to RGB |
 | hotfix.py | Remove single hot (and cold) pixels |
 | lrgb.py | LRGB luminance layering (HSL and ratio methods; optional SNR² super-luminance blend, R+G+B combine, background desaturation) |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
 | makemask.py | Build processing masks: colour->grey (R+2G+B)/4, black/white clip + stretch (each endpoint percentile `90%` or absolute `0.01` = fraction of full scale; mixable), morphological grow/shrink (min/max aperture), invert; mono output |
+| blend.py | Combine two images through an opacity mask: out = source*(1-m) + operand*m (white mask -> operand, black -> source, grey -> mean); mask normalized by its own full scale, mono mask broadcast over RGB; --mtf [K] reshapes the mask (mtf.py K, default 0.25), --invert; operand may be a numeric constant |
 | rgbbalance.py | RGB color balance and brightness normalization |
 | stack.py | Optimal weighted stacking with sigma-fade clipping |
 | staralign.py | Star-based image registration (pentagon descriptors, TPS) |

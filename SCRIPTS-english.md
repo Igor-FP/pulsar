@@ -36,11 +36,13 @@ A toolkit for batch processing of astronomical FITS images.
 | **absession.py** | Generate AstroBin acquisition session CSV |
 | **binxy.py** | Software 2×2 / 4×4 pixel binning |
 | **crop.py** | Crop FITS images (by size/center or margins) |
+| **flip.py** | Mirror/flip along axes: flip-Y (`Ynew=H-Y-1`, top/bottom), flip-X (`Xnew=W-X-1`, left/right) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
 | **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
 | **makemask.py** | Mask making: greyscale, black/white clip (percentile or absolute) + stretch, morphological grow/shrink, invert |
+| **blend.py** | Combine two images through an opacity mask: out = source*(1-m) + operand*m; --mtf, --invert |
 | **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
@@ -158,8 +160,12 @@ sub.py input_spec output_spec operand [offset]
 
 **Options**:
 - `--continuum [snr]` — Continuum subtraction mode. Detects stars in both input and operand, cross-matches them (tolerance 1.5 px), and scales the operand so star flux matches before subtraction. Stars subtract to zero, leaving only emission line signal (e.g. H-alpha). SNR threshold for star detection (default: 38).
+- `--bgcomp [P]` — Background-level compensation (only with `--continuum`). Subtracting `K*operand` lowers the background by ~`K*background(operand)`; this option adds it back so the result keeps the input's original background level. The amount added is the P-th percentile of the SCALED operand (`K*operand`), i.e. its background level, computed over NON-ZERO pixels only (the zero/no-data borders of aligned frames are ignored — otherwise, with more than P% zeros, the background would collapse to 0 and the compensation would do nothing). P is the background-detection factor (default 10, range 0..100). Stacks with `offset`.
+- `--float` — Write the result as float32 instead of clamping to the input's integer range. Integer output otherwise clips values below 0 (e.g. continuum residuals → 0 for unsigned types) or above the type maximum (converting to another integer type would lose the large positives); float32 keeps both. Float inputs keep their own dtype. Default: off (output keeps the input dtype — the old behavior).
 
 **Formula with --continuum**: `result = input - K * operand + offset`, where K = sum(flux_input) / sum(flux_operand) computed from matched star photometry.
+
+**Formula with --continuum --bgcomp**: `result = input - K * operand + bg + offset`, where `bg` is the P-th percentile of `K*operand` over non-zero pixels (P default 10), restoring the background to its original level.
 
 **Examples**:
 ```bash
@@ -170,6 +176,9 @@ sub light0001.fit cal0001.fit 1024      # subtract offset constant
 sub ha.fit continuum_sub.fit red.fit --continuum
 sub ha.fit output.fit broadband.fit --continuum 50
 sub ha0001.fit out0001.fit red0001.fit 1000 --continuum   # with offset
+sub ha.fit hae.fit red.fit --continuum --bgcomp           # background preserved (10% percentile)
+sub ha.fit hae.fit red.fit --continuum --bgcomp 5         # background-detection factor 5%
+sub ha.fit hae.fit red.fit --continuum --float            # float32: negative residuals kept
 ```
 
 ---
@@ -1445,6 +1454,46 @@ crop img0001.fit out0001.fit --top 100 --bottom 100 --left 200 --right 200
 
 ---
 
+### flip.py
+
+**Purpose**: Mirror FITS images along the X and/or Y axis (a pixel flip).
+
+**IMPORTANT - terminology.** "Flip along an axis" is ambiguous in everyday
+speech and people pick the wrong axis about half the time. Here a flip means
+REVERSING THAT COORDINATE, defined strictly by the pixel formula:
+- `--y` - flip along Y: `Ynew = H - Yold - 1` (reverse the row index) -> TOP <-> BOTTOM (vertical flip, image upside down). Left/right are NOT changed.
+- `--x` - flip along X: `Xnew = W - Xold - 1` (reverse the column index) -> LEFT <-> RIGHT (horizontal mirror). Top/bottom are NOT changed.
+
+So "flip along Y" reverses the Y coordinate (top<->bottom); it is NOT a reflection across the Y-axis line (that would be left<->right, i.e. `--x`). When in doubt, trust the coordinate formula, not the words.
+
+Axes may be combined (`--x --y` = a 180-degree rotation). Pixel values and dtype are preserved exactly (a flip is a lossless, reversible geometric remap). WCS keywords are NOT adjusted (pixel flip only). Supports 2D and 3-channel (3×H×W or H×W×3) - only the spatial axes are flipped.
+
+**Syntax**:
+```
+flip input_spec output_spec (--x | --y | --x --y)
+```
+
+**Parameters**:
+- `--y` - flip along Y: `Ynew = H - Yold - 1`, top <-> bottom (vertical flip)
+- `--x` - flip along X: `Xnew = W - Xold - 1`, left <-> right (horizontal mirror)
+- at least one axis required; both may be given
+
+**Examples**:
+```bash
+# Vertical flip (top <-> bottom)
+flip in.fit out.fit --y
+
+# Horizontal mirror (left <-> right), batch
+flip *.fit flipped/ --x
+
+# Both axes = 180-degree rotation
+flip in.fit out.fit --x --y
+```
+
+**Dependencies**: numpy/astropy only (batch_utils).
+
+---
+
 ### debayer.py
 
 **Purpose**: Demosaic Bayer-pattern FITS images to 3-channel RGB.
@@ -1594,6 +1643,55 @@ makemask rgb.fit mask.fit --black 50% --white 99%
 **Note for float frames**: in absolute mode float full scale is taken as 1.0. For linear float frames with an arbitrary range use percentile mode (`--black 1% --white 99%`), not absolute fractions.
 
 **Dependencies**: scipy (morphology).
+
+---
+
+### blend.py
+
+**Purpose**: Combine two FITS images through an opacity mask.
+
+The mask is a greyscale image whose value is the OPACITY of the operand at each pixel. With the normalized mask m in [0, 1]:
+
+```
+output = source * (1 - m) + operand * m
+```
+- white mask pixel (m = 1) -> output = operand
+- black mask pixel (m = 0) -> output = source
+- grey mask pixel (m = 0.5) -> arithmetic mean of source and operand
+
+Mask normalization: scaled to [0, 1] by its OWN full scale - the dtype maximum for integer masks (65535 for uint16, 255 for uint8, ...) and 1.0 for float masks (a float mask must already be in [0, 1]). A colour mask is reduced to grey with `(R + 2*G + B) / 4`; non-finite pixels map to 0 (fully source).
+
+**Syntax**:
+```
+blend.py source output mask operand [--mtf [K]] [--invert]
+```
+
+**Parameters**:
+- `source` - base image(s): single file, wildcard (*.fit), numbered, or @list.txt
+- `output` - single file, numbered pattern, or directory
+- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant.
+- `operand` - image blended in where the mask is bright: a FITS file, a matching sequence, or a numeric constant (flat level)
+- `--mtf [K]` - apply the MTF (midtone transfer function) to the mask in [0,1] BEFORE blending and BEFORE `--invert`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 brightens the mask (more operand), K>0.5 darkens it (more source). K defaults to 0.25 when omitted.
+- `--invert` - use the inverted mask (m -> 1 - m); applied AFTER `--mtf`
+
+**Examples**:
+```bash
+# Blend stars.fit over base.fit where mask.fit is bright
+blend base.fit out.fit mask.fit stars.fit
+
+# Fade the masked regions toward 0 (operand = constant 0)
+blend base.fit out.fit mask.fit 0
+
+# Brighten the mask midtones before blending (more of hi.fit)
+blend base.fit out.fit mask.fit hi.fit --mtf 0.2
+
+# Blend where the mask is DARK instead of bright
+blend base.fit out.fit mask.fit hi.fit --invert
+```
+
+`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
+
+**Dependencies**: numpy/astropy only (batch_utils).
 
 ---
 

@@ -7,8 +7,13 @@ sub - Subtract FITS images or constants, with optional continuum subtraction.
 Continuum subtraction (--continuum) is used to isolate narrowband emission
 (e.g. H-alpha) by subtracting a scaled broadband image (e.g. R channel).
 Stars are detected in both images, cross-matched, and the broadband image
-is scaled so that star flux matches — stars subtract to zero, leaving only
+is scaled so that star flux matches - stars subtract to zero, leaving only
 emission line signal.
+
+--float writes the result as float32 instead of clamping it to the input's
+integer range, so residuals that fall below 0 (or exceed the type maximum)
+are preserved rather than lost. --bgcomp adds the removed background back to
+a continuum result so its background stays at the input's original level.
 """
 
 import sys
@@ -40,6 +45,23 @@ def usage():
         "                     the operand so star flux matches before subtraction.\n"
         "                     Result = input - K * operand (+ offset)\n"
         "                     SNR threshold for star detection (default: 38).\n"
+        "  --bgcomp [P]       Background-level compensation (continuum mode only).\n"
+        "                     Subtracting K*operand also lowers the background by\n"
+        "                     ~K times the operand background; this adds that back\n"
+        "                     so the result keeps the input's original background.\n"
+        "                     The amount added is the P-th percentile of the\n"
+        "                     SCALED operand (K*operand), i.e. its background\n"
+        "                     level, computed over NON-ZERO pixels only so the\n"
+        "                     zero/no-data borders of aligned frames are ignored.\n"
+        "                     P is the background-detection factor (default 10,\n"
+        "                     range 0..100). Stacks with 'offset'. Needs --continuum.\n"
+        "                     Result = input - K * operand + bg (+ offset)\n"
+        "  --float            Write the result as float32 instead of clamping to\n"
+        "                     the input's integer range. Integer output otherwise\n"
+        "                     clips values below 0 (e.g. continuum residuals -> 0\n"
+        "                     for unsigned types) or above the type maximum;\n"
+        "                     float32 keeps them. Float inputs keep their own\n"
+        "                     dtype. Default: off (output keeps the input dtype).\n"
     )
     sys.exit(1)
 
@@ -49,6 +71,8 @@ def parse_args(argv):
 
     continuum = False
     continuum_snr = 38.0
+    force_float = False
+    bgcomp_pct = None      # None = disabled; else percentile in [0, 100]
 
     # Extract options
     i = 0
@@ -63,6 +87,19 @@ def parse_args(argv):
             if i < len(args) and not args[i].startswith("--"):
                 try:
                     continuum_snr = float(args[i])
+                    i += 1
+                except ValueError:
+                    pass  # not a number, treat as positional
+        elif args[i] == "--float":
+            force_float = True
+            i += 1
+        elif args[i] == "--bgcomp":
+            bgcomp_pct = 10.0
+            i += 1
+            # Optional percentile value
+            if i < len(args) and not args[i].startswith("--"):
+                try:
+                    bgcomp_pct = float(args[i])
                     i += 1
                 except ValueError:
                     pass  # not a number, treat as positional
@@ -88,7 +125,16 @@ def parse_args(argv):
             sys.stderr.write("Error: offset must be a number.\n")
             sys.exit(1)
 
-    return input_pattern, output_pattern, operand_str, offset, continuum, continuum_snr
+    if bgcomp_pct is not None:
+        if not continuum:
+            sys.stderr.write("Error: --bgcomp requires --continuum.\n")
+            sys.exit(1)
+        if not (0.0 <= bgcomp_pct <= 100.0):
+            sys.stderr.write("Error: --bgcomp percentile must be in 0..100.\n")
+            sys.exit(1)
+
+    return (input_pattern, output_pattern, operand_str, offset, continuum,
+            continuum_snr, force_float, bgcomp_pct)
 
 
 def compute_continuum_scale(data_ha, data_broad, snr=38.0):
@@ -209,14 +255,18 @@ def compute_continuum_scale(data_ha, data_broad, snr=38.0):
     return K, n_valid
 
 
-def apply_sub_operation(base_data, operand, offset):
+def apply_sub_operation(base_data, operand, offset, force_float=False):
     """
     Core arithmetic: result = base - operand + offset
 
     - base_data: ndarray from input (2D)
     - operand: scalar or ndarray (2D same shape)
     - offset: scalar
-    - For integer types: compute in float64, clamp to dtype range, round, cast back.
+    - force_float: for integer input, write float32 (no clamp/round) so values
+      below 0 or above the type max are preserved. Float input is unaffected
+      (it already keeps its own dtype, losslessly).
+    - For integer types (default): compute in float64, clamp to dtype range,
+      round, cast back.
     - For floats: compute in float64, cast back to original float dtype.
     """
     if base_data is None or base_data.ndim != 2:
@@ -241,17 +291,24 @@ def apply_sub_operation(base_data, operand, offset):
             return work.astype(np.float64)
         return work.astype(base_data.dtype)
 
-    info = np.iinfo(base_data.dtype)
+    # Integer input
     work = base_data.astype(np.float64)
     work = work - op + offset
 
+    if force_float:
+        # Preserve values that went below 0 or above the integer max instead of
+        # clamping; write float32 (never NaN/Inf).
+        work = np.nan_to_num(work, nan=0.0, posinf=0.0, neginf=0.0)
+        return work.astype(np.float32)
+
+    info = np.iinfo(base_data.dtype)
     np.clip(work, info.min, info.max, out=work)
     work = np.rint(work)
     return work.astype(base_data.dtype)
 
 
 def process_file(infile, outfile, operand_spec, file_index, offset,
-                 continuum_K=None):
+                 continuum_K=None, force_float=False, bgcomp_pct=None):
     """Load, process, and save single FITS file."""
     with fits.open(infile, memmap=False) as hdul:
         if hdul[0].data is None:
@@ -271,22 +328,55 @@ def process_file(infile, outfile, operand_spec, file_index, offset,
         )
 
         # Scale operand for continuum subtraction
+        eff_offset = offset
+        bg = None
         if continuum_K is not None and isinstance(operand, np.ndarray):
             operand = operand.astype(np.float64) * continuum_K
+            # Background-level compensation: add back the background removed by
+            # the subtraction - the P-th percentile of the SCALED operand
+            # (K*operand), over non-zero pixels only so aligned-frame zero
+            # borders are ignored - so the result keeps the input's original
+            # background level.
+            if bgcomp_pct is not None:
+                pos = operand[operand > 0]
+                bg = float(np.percentile(pos, bgcomp_pct)) if pos.size > 0 else 0.0
+                eff_offset = offset + bg
 
-        new_data = apply_sub_operation(data, operand, offset)
+        new_data = apply_sub_operation(data, operand, eff_offset,
+                                       force_float=force_float)
 
+        # Switching to float invalidates any integer BZERO/BSCALE scaling.
+        float_out = np.issubdtype(new_data.dtype, np.floating)
+        if float_out:
+            for key in ("BZERO", "BSCALE"):
+                if key in header:
+                    del header[key]
+
+        notes = []
         if continuum_K is not None:
-            header["HISTORY"] = f"Continuum subtracted (K={continuum_K:.6f})"
+            note = f"continuum K={continuum_K:.6f}"
+            if bg is not None:
+                note += f", bgcomp p{bgcomp_pct:g}=+{bg:.4f}"
+            notes.append(note)
+        if force_float:
+            notes.append("float32 output")
+        if notes:
+            header["HISTORY"] = "sub.py: " + "; ".join(notes)
 
-        hdul[0].data = new_data
-        hdul[0].header = header
-        hdul.writeto(outfile, overwrite=True)
+        if float_out:
+            # Write a fresh HDU so astropy does not scale-back to the input's
+            # integer BZERO/BSCALE (which would re-type/corrupt float output).
+            fits.PrimaryHDU(new_data, header=header).writeto(
+                outfile, overwrite=True)
+        else:
+            hdul[0].data = new_data
+            hdul[0].header = header
+            hdul.writeto(outfile, overwrite=True)
 
 
 def main():
     (input_pattern, output_pattern, operand_str, offset,
-     continuum, continuum_snr) = parse_args(sys.argv)
+     continuum, continuum_snr, force_float, bgcomp_pct) = parse_args(sys.argv)
 
     try:
         io_pairs = batch_utils.build_io_file_lists(input_pattern, output_pattern)
@@ -335,14 +425,22 @@ def main():
 
         print(f"Continuum scale: K={continuum_K:.6f} "
               f"(from {n_stars} matched stars)")
-        print(f"  Result = input - {continuum_K:.6f} * operand"
-              + (f" + {offset}" if offset != 0 else ""))
+        result_msg = f"  Result = input - {continuum_K:.6f} * operand"
+        if bgcomp_pct is not None:
+            result_msg += f" + bg(p{bgcomp_pct:g} of scaled operand)"
+        if offset != 0:
+            result_msg += f" + {offset}"
+        print(result_msg)
+
+    if force_float:
+        print("Output: float32 (integer inputs are not clamped)")
 
     total = len(io_pairs)
     for i, (infile, outfile) in enumerate(io_pairs, start=1):
         try:
             process_file(infile, outfile, operand_spec, i - 1, offset,
-                         continuum_K)
+                         continuum_K, force_float=force_float,
+                         bgcomp_pct=bgcomp_pct)
             sys.stderr.write(f"\rProcessed {i} / {total} files")
             sys.stderr.flush()
         except Exception as e:
