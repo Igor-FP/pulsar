@@ -257,19 +257,30 @@ add image.fit result.fit 1024</code></pre>
             <section id="sub">
                 <div class="script-card">
                     <h3>sub.py <span class="badge">арифметика</span></h3>
-                    <p>Вычитание значения или изображения из входных кадров.</p>
+                    <p>Вычитание значения или изображения из входных кадров. Режим континуума (<code>--continuum</code>) выделяет узкополосную эмиссию (H-alpha), вычитая масштабированный широкополосный кадр так, чтобы звёзды ушли в ноль.</p>
 
                     <div class="formula">result = input - operand + offset</div>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>sub.py input_spec output_spec operand [offset]</code>
+                        <code>sub.py input_spec output_spec operand [offset] [--continuum [snr]] [--bgcomp [P]] [--float]</code>
                     </div>
+
+                    <div class="params">
+                        <h4>Параметры</h4>
+                        <div class="param"><span class="param-name">--continuum [snr]</span><span class="param-desc">вычитание континуума: детекция звёзд, кросс-матч и масштаб K по фотометрии; result = input - K*operand + offset (snr детекции, по умолчанию 38)</span></div>
+                        <div class="param"><span class="param-name">--bgcomp [P]</span><span class="param-desc">только с --continuum: вернуть фон к исходному уровню, добавив P-й перцентиль масштабированного вычитаемого K*operand (по ненулевым пикселям); P - фактор детекции фона, по умолчанию 10</span></div>
+                        <div class="param"><span class="param-name">--float</span><span class="param-desc">писать float32 вместо обрезки под целый тип входа (сохраняет ушедшие ниже 0 остатки и большие значения); float-вход сохраняет свой тип; по умолчанию выключено</span></div>
+                    </div>
+
+                    <p>С <code>--continuum --bgcomp</code>: <code>result = input - K*operand + bg + offset</code>, где bg - P-й перцентиль K*operand по ненулевым пикселям (фон возвращается к исходному уровню).</p>
 
                     <h4>Примеры</h4>
                     <pre><code>sub light0001.fit dark_sub0001.fit master_dark.fit
 sub raw.fit calibrated.fit dark.fit 100
-sub light0001.fit cal0001.fit 0        :: для термостабильных CCD</code></pre>
+sub ha.fit hae.fit red.fit --continuum          :: вычитание континуума
+sub ha.fit hae.fit red.fit --continuum --bgcomp :: + компенсация фона (10%)
+sub ha.fit hae.fit red.fit --continuum --float  :: float32, без потери отрицательных</code></pre>
                 </div>
             </section>
 

@@ -159,8 +159,12 @@ sub.py input_spec output_spec operand [offset]
 
 **Options**:
 - `--continuum [snr]` — Continuum subtraction mode. Detects stars in both input and operand, cross-matches them (tolerance 1.5 px), and scales the operand so star flux matches before subtraction. Stars subtract to zero, leaving only emission line signal (e.g. H-alpha). SNR threshold for star detection (default: 38).
+- `--bgcomp [P]` — Background-level compensation (only with `--continuum`). Subtracting `K*operand` lowers the background by ~`K*background(operand)`; this option adds it back so the result keeps the input's original background level. The amount added is the P-th percentile of the SCALED operand (`K*operand`), i.e. its background level, computed over NON-ZERO pixels only (the zero/no-data borders of aligned frames are ignored — otherwise, with more than P% zeros, the background would collapse to 0 and the compensation would do nothing). P is the background-detection factor (default 10, range 0..100). Stacks with `offset`.
+- `--float` — Write the result as float32 instead of clamping to the input's integer range. Integer output otherwise clips values below 0 (e.g. continuum residuals → 0 for unsigned types) or above the type maximum (converting to another integer type would lose the large positives); float32 keeps both. Float inputs keep their own dtype. Default: off (output keeps the input dtype — the old behavior).
 
 **Formula with --continuum**: `result = input - K * operand + offset`, where K = sum(flux_input) / sum(flux_operand) computed from matched star photometry.
+
+**Formula with --continuum --bgcomp**: `result = input - K * operand + bg + offset`, where `bg` is the P-th percentile of `K*operand` over non-zero pixels (P default 10), restoring the background to its original level.
 
 **Examples**:
 ```bash
@@ -171,6 +175,9 @@ sub light0001.fit cal0001.fit 1024      # subtract offset constant
 sub ha.fit continuum_sub.fit red.fit --continuum
 sub ha.fit output.fit broadband.fit --continuum 50
 sub ha0001.fit out0001.fit red0001.fit 1000 --continuum   # with offset
+sub ha.fit hae.fit red.fit --continuum --bgcomp           # background preserved (10% percentile)
+sub ha.fit hae.fit red.fit --continuum --bgcomp 5         # background-detection factor 5%
+sub ha.fit hae.fit red.fit --continuum --float            # float32: negative residuals kept
 ```
 
 ---
