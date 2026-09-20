@@ -36,6 +36,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **absession.py** | Generate AstroBin acquisition session CSV |
 | **binxy.py** | Software 2×2 / 4×4 pixel binning |
 | **crop.py** | Crop FITS images (by size/center or margins) |
+| **flip.py** | Mirror/flip along axes: flip-Y (`Ynew=H-Y-1`, top/bottom), flip-X (`Xnew=W-X-1`, left/right) |
 | **debayer.py** | Demosaic Bayer-pattern FITS to RGB |
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
@@ -1450,6 +1451,46 @@ crop img.fit out.fit --width 1000 --height 1000 --autocenter
 # Trim margins
 crop img0001.fit out0001.fit --top 100 --bottom 100 --left 200 --right 200
 ```
+
+---
+
+### flip.py
+
+**Purpose**: Mirror FITS images along the X and/or Y axis (a pixel flip).
+
+**IMPORTANT - terminology.** "Flip along an axis" is ambiguous in everyday
+speech and people pick the wrong axis about half the time. Here a flip means
+REVERSING THAT COORDINATE, defined strictly by the pixel formula:
+- `--y` - flip along Y: `Ynew = H - Yold - 1` (reverse the row index) -> TOP <-> BOTTOM (vertical flip, image upside down). Left/right are NOT changed.
+- `--x` - flip along X: `Xnew = W - Xold - 1` (reverse the column index) -> LEFT <-> RIGHT (horizontal mirror). Top/bottom are NOT changed.
+
+So "flip along Y" reverses the Y coordinate (top<->bottom); it is NOT a reflection across the Y-axis line (that would be left<->right, i.e. `--x`). When in doubt, trust the coordinate formula, not the words.
+
+Axes may be combined (`--x --y` = a 180-degree rotation). Pixel values and dtype are preserved exactly (a flip is a lossless, reversible geometric remap). WCS keywords are NOT adjusted (pixel flip only). Supports 2D and 3-channel (3×H×W or H×W×3) - only the spatial axes are flipped.
+
+**Syntax**:
+```
+flip input_spec output_spec (--x | --y | --x --y)
+```
+
+**Parameters**:
+- `--y` - flip along Y: `Ynew = H - Yold - 1`, top <-> bottom (vertical flip)
+- `--x` - flip along X: `Xnew = W - Xold - 1`, left <-> right (horizontal mirror)
+- at least one axis required; both may be given
+
+**Examples**:
+```bash
+# Vertical flip (top <-> bottom)
+flip in.fit out.fit --y
+
+# Horizontal mirror (left <-> right), batch
+flip *.fit flipped/ --x
+
+# Both axes = 180-degree rotation
+flip in.fit out.fit --x --y
+```
+
+**Dependencies**: numpy/astropy only (batch_utils).
 
 ---
 

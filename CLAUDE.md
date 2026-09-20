@@ -85,6 +85,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | absession.py | AstroBin acquisition session CSV generator |
 | binxy.py | Software 2×2 / 4×4 pixel binning |
 | crop.py | Crop FITS images (by size/center or margins) |
+| flip.py | Mirror/flip along axes: --y reverses Y (Ynew=H-Y-1, top<->bottom), --x reverses X (Xnew=W-X-1, left<->right); combinable (=180 rot), values/dtype preserved, WCS not adjusted |
 | debayer.py | Demosaic Bayer-pattern FITS to RGB |
 | hotfix.py | Remove single hot (and cold) pixels |
 | lrgb.py | LRGB luminance layering (HSL and ratio methods; optional SNR² super-luminance blend, R+G+B combine, background desaturation) |
