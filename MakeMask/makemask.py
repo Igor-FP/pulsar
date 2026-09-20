@@ -20,7 +20,8 @@ Full scale is the dtype maximum for integer frames (e.g. 65535 for uint16) and
 1.0 for float frames. So an absolute --black 0.01 means 0.01 on a float frame and
 0.01*65535 on a uint16 frame; a percentile --white 90% means the 90th percentile
 (the brightest 10% saturate to white). --black 0 --white 1 (the defaults) is a
-no-op. Output is ALWAYS single-channel and the input dtype is preserved.
+true no-op; --black 0% --white 100% clips nothing but min-max normalizes to the
+full range. Output is ALWAYS single-channel and the input dtype is preserved.
 """
 
 import sys
@@ -60,8 +61,10 @@ def usage():
         "                  [black_level, white_level] onto the full range. The two\n"
         "                  forms may be mixed (e.g. --black 1% --white 0.95).\n"
         "                  Giving either enables the stretch; the missing side\n"
-        "                  falls back to its default. Defaults: --black 0 --white 1\n"
-        "                  (a no-op). The resolved black level must be < white.\n"
+        "                  falls back to its default. Defaults --black 0 --white 1\n"
+        "                  are a true no-op; --black 0% --white 100% clips nothing\n"
+        "                  but min-max normalizes to the full range. The resolved\n"
+        "                  black level must be < white.\n"
         "  --grow R      - grow/shrink by a circular aperture of radius R px:\n"
         "                  R>0 dilates (stars grow, max filter), R<0 erodes\n"
         "                  (min filter). Applied before inversion.\n"
