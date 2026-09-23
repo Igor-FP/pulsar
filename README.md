@@ -202,7 +202,7 @@ autosolve --rectify --align *.fit aligned\
 
 ## Script Reference
 
-`backflat` always saves the corrected image (second positional argument), `background.fit` and `back_mask.fit`. Use `--out-back` / `--out-mask` to change the additional output names. Existing outputs require `--overwrite` or `-y`; the check runs before processing. The full RGB background is subtracted per channel, then one common level (the mean of the three background channel means) is added to make the restored background neutral. The temporary `.backflat-cache` is cleaned at the end. See the [full reference](SCRIPTS-english.md#backflatpy) and [implementation notes](Backflat/DEVELOPMENT.md) (Russian).
+`backflat` always saves the corrected image (second positional argument), `background.fit` and `back_mask.fit`. Use `--out-back` / `--out-mask` to change the additional output names. Existing outputs require `--overwrite` or `-y`; the check runs before processing. The full RGB background is subtracted per channel, then one common level (the mean of the three background channel means) is added to make the restored background neutral. All starless sources are checked for Y reversal against the input; uncertain orientation stops the run, with explicit `--starless-flip-y` / `--starless-no-flip` overrides. The temporary `.backflat-cache` is cleaned at the end. See the [full reference](SCRIPTS-english.md#backflatpy) and [implementation notes](Backflat/DEVELOPMENT.md) (Russian).
 
 ```batch
 backflat input.fit corrected.fit --starless starless.fit
