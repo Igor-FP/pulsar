@@ -34,6 +34,8 @@ DEFAULTS = {
     "margin": None, "diffusion_scale": 4.0, "median2_scale": 4.0,
 }
 PREPARATION_KEYS = ("median1", "edge", "blur1", "median2", "median_method", "median2_scale")
+ORIENTATION_MIN_GAP = 0.05
+ORIENTATION_METHOD = "hp-corr-v1"
 
 
 def ascii_text(value):
@@ -120,6 +122,104 @@ def read_rgb(path):
             np.count_nonzero(invalid), path), error=True)
         image[invalid] = 0.0
     return image, header, dtype
+
+
+class StarlessOrientationError(ValueError):
+    """Stop the whole batch rather than guess or mix input coordinate systems."""
+
+
+def orientation_preview(image, longest=1024):
+    """Area-average RGB into a small, linearly detrended measurement plane.
+
+    Mirrored bin edges make reduction commute with Y reversal, even when the
+    source dimensions are not multiples of the reduction factor.
+    """
+    plane = np.mean(image, axis=0, dtype=np.float64)
+    factor = max(1.0, max(plane.shape)/longest)
+    coordinates = []
+    for axis in (0, 1):
+        length = plane.shape[axis]
+        bins = max(1, int(round(length/factor)))
+        if bins % 2 != length % 2:
+            bins = max(1, bins-1)
+        if bins == length:
+            coordinates.append(np.arange(length)-(length-1)/2)
+            continue
+        edges = np.rint(np.linspace(0, length, bins+1)).astype(int)
+        for i in range((bins+1)//2):
+            edges[bins-i] = length-edges[i]
+        coordinates.append((edges[:-1]+edges[1:]-length)/2)
+        shape = (-1, 1) if axis == 0 else (1, -1)
+        plane = np.add.reduceat(plane, edges[:-1], axis=axis)/np.diff(edges).reshape(shape)
+    scale = float(np.max(np.abs(plane)))
+    if not math.isfinite(scale):
+        raise StarlessOrientationError("Non-finite orientation preview; check the input intensity range.")
+    plane /= max(scale, np.finfo(np.float64).tiny)
+    plane -= plane.mean()
+    for axis, coordinate in enumerate(coordinates):
+        denominator = np.dot(coordinate, coordinate)
+        if denominator:
+            slope = np.dot(plane.mean(axis=1-axis), coordinate)/denominator
+            plane -= slope*coordinate.reshape((-1, 1) if axis == 0 else (1, -1))
+    return plane
+
+
+def orientation_feature(plane, sigma):
+    """High-pass and robustly limit absent stars in a measurement copy only."""
+    feature = plane-ndimage.gaussian_filter(plane, sigma, mode="reflect")
+    border = max(1, int(4*sigma+0.5))
+    feature = feature[border:-border, border:-border]
+    if feature.size < 256:
+        return None
+    center = np.median(feature)
+    spread = 1.4826*np.median(np.abs(feature-center))
+    tolerance = 128*np.finfo(np.float64).eps
+    if spread <= tolerance:
+        return None
+    feature = np.clip(feature, center-5*spread, center+5*spread)
+    feature -= feature.mean()
+    norm = float(np.linalg.norm(feature))
+    if not math.isfinite(norm) or norm <= tolerance*math.sqrt(feature.size):
+        return None
+    return feature/norm
+
+
+def orient_starless(image, starless, mode="auto"):
+    """Resolve only a possible Y reversal, with a common rule for every source."""
+    if image.shape != starless.shape or image.ndim != 3 or image.shape[0] != 3:
+        raise StarlessOrientationError("The starless image must have the same RGB shape as the input.")
+    if mode not in ("auto", "flip-y", "no-flip"):
+        raise ValueError("Unknown starless orientation mode: " + str(mode))
+    decision = {"mode": mode, "flip_y": mode == "flip-y", "scores": [],
+                "method": ORIENTATION_METHOD, "min_gap": ORIENTATION_MIN_GAP}
+    guidance = ("Inspect the pair, then use --starless-flip-y to force a Y flip or "
+                "--starless-no-flip to keep the row order without checking. "
+                "Other misregistration must be corrected outside backflat.")
+    if mode == "auto":
+        a, b = orientation_preview(image), orientation_preview(starless)
+        if min(a.shape) < 32:
+            raise StarlessOrientationError("Starless Y orientation is ambiguous: preview too small. " + guidance)
+        size_scale = min(max(a.shape)/1024.0, min(a.shape)/160.0)
+        for sigma in (max(1.0, 8*size_scale), max(2.0, 16*size_scale)):
+            x, y = orientation_feature(a, sigma), orientation_feature(b, sigma)
+            if x is None or y is None:
+                raise StarlessOrientationError("Starless Y orientation is ambiguous: insufficient "
+                                               "high-pass structure (flat or smooth field). " + guidance)
+            same = float(np.clip(np.sum(x*y), -1.0, 1.0))
+            flipped = float(np.clip(np.sum(x*y[::-1]), -1.0, 1.0))
+            decision["scores"].append({"sigma": sigma, "asis": same, "flipped": flipped})
+        gaps = [score["asis"]-score["flipped"] for score in decision["scores"]]
+        if all(gap >= ORIENTATION_MIN_GAP for gap in gaps):
+            decision["flip_y"] = False
+        elif all(gap <= -ORIENTATION_MIN_GAP for gap in gaps):
+            decision["flip_y"] = True
+        else:
+            values = "; ".join("sigma={sigma:.3g}: as-is={asis:.6f}, Y-flipped={flipped:.6f}".format(**score)
+                               for score in decision["scores"])
+            raise StarlessOrientationError("Starless Y orientation is ambiguous: {}. "
+                                           "Need the same winner with a gap >= {:.3f} at both scales. {}".format(
+                                               values, ORIENTATION_MIN_GAP, guidance))
+    return (starless[:, ::-1, :].copy() if decision["flip_y"] else starless), decision
 
 
 def clean_header(header):
@@ -603,11 +703,8 @@ def cached_starless(input_path, image, header, engine, executable, cache_dir):
     with open(input_path, "rb") as source:
         for chunk in iter(lambda: source.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
-    identity = "{}:{}:{}:{}:backflat-starless-v2".format(
+    identity = "{}:{}:{}:{}:backflat-starless-v3-raw-y".format(
         engine, os.path.realpath(path), binary.st_size, binary.st_mtime_ns)
-    if engine == "sxt":
-        # Older SxT caches retain the CLI's inverted FITS row order.
-        identity += ":sxt-flip-y-v1"
     digest.update(identity.encode("utf-8"))
     key = digest.hexdigest()
     os.makedirs(cache_dir, exist_ok=True)
@@ -642,19 +739,11 @@ def cached_starless(input_path, image, header, engine, executable, cache_dir):
         data, _, _ = read_rgb(target)
         if data.shape != image.shape:
             raise ValueError("Star-removal tool changed the image dimensions.")
-        if engine == "sxt":
-            # RC-Astro CLI reverses FITS rows. Restore input coordinates once,
-            # before caching or applying masks; channel and X order stay intact.
-            data = data[:, ::-1, :].copy()
-            report("Restored SxT FITS orientation: Ynew = H - 1 - Yold.")
         data *= scale
         cache_header = clean_header(header)
         cache_header["BFENGINE"] = ascii_text(version)
         cache_header.add_history(ascii_text("backflat starless cache: " + version))
-        if engine == "sxt":
-            cache_header.add_history("backflat: corrected RC-Astro CLI Y flip; input orientation restored")
-            version += "; Y flip corrected"
-            cache_header["BFENGINE"] = ascii_text(version)
+        cache_header.add_history("backflat: raw engine row order; orientation resolved after loading")
         atomic_fits(cached, data, cache_header, overwrite=True)
     return data, version
 
@@ -1230,6 +1319,8 @@ def usage(stream=None):
         "Gaussian diameters are FWHM.\n"
         "Pixel diameters are specified at diagonal 7515 px and scale with the image.\n\n"
         "  --starless SPEC      Matching starless FITS, or matching batch input spec\n"
+        "  --starless-flip-y    Force Y reversal of the supplied/raw engine starless\n"
+        "  --starless-no-flip   Keep starless row order without checking\n"
         "  --sxt                Use an installed, licensed RC-Astro CLI\n"
         "  --starnet            Use installed StarNet2 with FITS/linear support (2.6+)\n"
         "  --sxt-exe FILE       RC-Astro executable (otherwise search PATH)\n"
@@ -1275,7 +1366,15 @@ def usage(stream=None):
         "Accuracy: fast uses spatial reduction after blur; intensity is never quantized.\n"
         "Use --median2-scale 1 --diffusion-scale 1 for no spatial reduction.\n"
         "--median-mode exact selects SciPy; diffusion scale is still separate.\n"
-        "--starless must match the input orientation; --sxt corrects the CLI Y flip.\n\n"
+        "Orientation: every source (--starless/--sxt/--starnet, including cache)\n"
+        "is checked against the input using robust high-pass correlations at two\n"
+        "scales on an area-averaged preview up to 1024 pixels. A Y flip is logged;\n"
+        "an aligned image passes silently. Ambiguous pairs stop the whole batch.\n"
+        "Both scales must prefer the same orientation by at least 0.05. Flat or\n"
+        "Y-symmetric fields may need one of the mutually exclusive manual flags.\n"
+        "The required orientation must stay the same throughout a batch. Earlier\n"
+        "saved results remain if a later pair fails. No X flip/shift/rotation is solved.\n"
+        "Masks stay in input coordinates. The decision is recorded in HISTORY.\n\n"
         "GUI: LMB paint, RMB erase; wheel brush diameter (+/-1, Shift +/-10).\n"
         "+/- zoom at cursor; middle drag pan; Home/End MTF; M toggle mask.\n"
         "Ctrl+Z undo stroke; Tab mask/parameters; 1/2/3/4 original/prepared/bg/result.\n"
@@ -1295,6 +1394,7 @@ def parse_args(argv):
     params = dict(DEFAULTS)
     options = {"starless": None, "mask": None, "out_back": None, "out_mask": None,
                "sxt_exe": None,
+               "starless_flip_y": False, "starless_no_flip": False,
                "starnet_exe": None, "cache_dir": None, "sxt": False,
                "starnet": False, "no_gui": False, "overwrite": False, "median_mode": "fast"}
     positional = []
@@ -1304,7 +1404,8 @@ def parse_args(argv):
         if arg == "--":
             positional.extend(argv[i+1:])
             break
-        if arg in ("--sxt", "--starnet", "--no-gui", "--overwrite", "-y"):
+        if arg in ("--sxt", "--starnet", "--no-gui", "--overwrite", "-y",
+                   "--starless-flip-y", "--starless-no-flip"):
             options["overwrite" if arg == "-y" else arg[2:].replace("-", "_")] = True
             i += 1
             continue
@@ -1330,6 +1431,8 @@ def parse_args(argv):
         raise SystemExit(1)
     if sum((bool(options["starless"]), options["sxt"], options["starnet"])) != 1:
         raise ValueError("Choose exactly one of --starless, --sxt or --starnet.")
+    if options["starless_flip_y"] and options["starless_no_flip"]:
+        raise ValueError("--starless-flip-y and --starless-no-flip are mutually exclusive.")
     validate_params(params)
     if options["median_mode"] not in ("fast", "exact"):
         raise ValueError("--median-mode must be fast or exact.")
@@ -1418,6 +1521,14 @@ def output_header(header, params, item, engine_info, stats, background=False):
         result.add_history(ascii_text("backflat: {}={}".format(key, "auto(1% diagonal)" if value is None else value)))
     result.add_history(ascii_text("backflat: mask=" + os.path.abspath(item["archive"])))
     result.add_history(ascii_text("backflat: starless=" + engine_info))
+    orientation = stats["orientation"]
+    result.add_history("backflat: starless orientation mode={}; applied={}".format(
+        orientation["mode"], "flip-y" if orientation["flip_y"] else "as-is"))
+    if orientation["mode"] == "auto":
+        result.add_history("backflat: {}; min correlation gap={:g}".format(
+            orientation["method"], orientation["min_gap"]))
+        for score in orientation["scores"]:
+            result.add_history("backflat: HP sigma={sigma:.4g}; corr as-is={asis:.6f}, flip-y={flipped:.6f}".format(**score))
     result.add_history("backflat: iterations={}; means={}".format(
         stats["iterations"], ",".join("{:.12g}".format(v) for v in stats["channel_means"])))
     result.add_history("backflat: K=mean(Rmean,Gmean,Bmean)={:.12g}; common RGB level".format(
@@ -1431,7 +1542,7 @@ def output_header(header, params, item, engine_info, stats, background=False):
     return result
 
 
-def process_item(item, params, options):
+def process_item(item, params, options, orientation_state=None):
     progress = OperationLog()
     report("Corrected output: " + item["output"])
     report("Background output: " + item["bg"])
@@ -1447,8 +1558,25 @@ def process_item(item, params, options):
         with operation(progress, "Star removal or cache"):
             starless, engine_info = cached_starless(item["input"], image, header, engine,
                                                    options[engine+"_exe"], item["cache"])
-    if starless.shape != image.shape:
-        raise ValueError("The starless image must have the same shape and registration as the input.")
+    mode = ("flip-y" if options["starless_flip_y"] else
+            "no-flip" if options["starless_no_flip"] else "auto")
+    try:
+        starless, orientation = orient_starless(image, starless, mode)
+    except StarlessOrientationError as exc:
+        raise StarlessOrientationError("{}\nInput: {}\nStarless: {}".format(
+            exc, item["input"], engine_info)) from None
+    if orientation_state is not None:
+        if orientation_state and orientation_state["flip_y"] != orientation["flip_y"]:
+            raise StarlessOrientationError("Inconsistent starless Y orientation within this batch. "
+                                           "First pair ({}): {}; current pair ({}): {}. "
+                                           "Normalize the starless files or split the batch. "
+                                           "Earlier saved outputs are retained.".format(
+                                               orientation_state["input"],
+                                               "flip-y" if orientation_state["flip_y"] else "as-is",
+                                               item["input"], "flip-y" if orientation["flip_y"] else "as-is"))
+        orientation_state.update(flip_y=orientation["flip_y"], input=orientation_state.get("input", item["input"]))
+    if orientation["flip_y"]:
+        report("Corrected starless Y orientation ({}): Ynew = H - 1 - Yold.".format(mode))
     raw = None
     effective_params = dict(params)
     if item["mask"]:
@@ -1466,6 +1594,7 @@ def process_item(item, params, options):
         session.apply(model=False)
         MaskEditor(session, loaded_mask=raw is not None).run()
     # Archive even an empty mask: it records the explicit choice to exclude nothing.
+    session.stats["orientation"] = orientation
     session.archive()
     report("Saved mask: " + item["archive"])
     hdr = output_header(header, session.params, item, engine_info, session.stats, background=True)
@@ -1495,12 +1624,15 @@ def main(argv=None):
                            for key in ("input", "starless", "mask", "output", "bg", "archive")
                            if item[key]}
         failed = 0
+        orientation_state = {}
         for i, item in enumerate(items, 1):
             cache_dir = os.path.abspath(item["cache"])
             cache_dirs.setdefault(cache_dir, os.path.normcase(os.path.realpath(cache_dir)))
             report("[{}/{}] {}".format(i, len(items), item["input"]))
             try:
-                process_item(item, params, options)
+                process_item(item, params, options, orientation_state)
+            except StarlessOrientationError:
+                raise
             except Exception as exc:
                 failed += 1
                 report("Error: " + str(exc), error=True)

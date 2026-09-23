@@ -286,7 +286,7 @@ class CommandLineContracts(unittest.TestCase):
             mask[15:25, 20:40] = 255
             fits.PrimaryHDU(mask).writeto(folder/"source_mask.fit")
             command = [sys.executable, "-B", script, name, "results/output.fit", "--starless", "starless.fit",
-                       "--mask", "source_mask.fit", "--no-gui"]
+                       "--mask", "source_mask.fit", "--no-gui", "--starless-no-flip"]
             env = dict(os.environ, PYTHONIOENCODING="ascii:strict")
             with (folder/"log.txt").open("wb") as log:
                 process = subprocess.run(command, cwd=directory, env=env, stdout=log, stderr=log)
@@ -328,7 +328,7 @@ class CommandLineContracts(unittest.TestCase):
             background = folder/"models"/"sky.fit"
             archive = folder/"masks"/"objects.fit"
             args = ["backflat", str(folder/"input.fit"), str(output), "--starless", str(folder/"stars.fit"),
-                    "--no-gui", "--out-back", str(background), "--out-mask", str(archive)]
+                    "--no-gui", "--out-back", str(background), "--out-mask", str(archive), "--starless-no-flip"]
             initial = args + ["--mask", str(folder/"source.fit")]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(backflat.main(initial), 0)
@@ -437,15 +437,17 @@ class CommandLineContracts(unittest.TestCase):
                 fits.PrimaryHDU(image[:, ::-1, :]*0.5).writeto(output)
                 return ""
             cache = os.path.join(directory, "cache")
-            # A pre-fix cache must not bypass the new orientation correction.
+            # Both older cache conventions must be ignored by the raw-row cache.
             os.makedirs(cache)
             binary = os.stat(executable)
             digest = backflat.hashlib.sha256(Path(source).read_bytes())
             identity = "{}:{}:{}:{}:backflat-starless-v2".format(
                 "sxt", os.path.realpath(executable), binary.st_size, binary.st_mtime_ns)
-            digest.update(identity.encode("utf-8"))
-            fits.PrimaryHDU(np.full_like(image, -123)).writeto(
-                os.path.join(cache, digest.hexdigest()+".fit"))
+            for suffix in ("", ":sxt-flip-y-v1"):
+                old_digest = digest.copy()
+                old_digest.update((identity+suffix).encode("utf-8"))
+                fits.PrimaryHDU(np.full_like(image, -123)).writeto(
+                    os.path.join(cache, old_digest.hexdigest()+".fit"))
             with mock.patch.object(backflat.shutil, "which", return_value=executable), \
                  mock.patch.object(backflat, "discover_engine", return_value=(executable, "test:1")) as probe, \
                  mock.patch.object(backflat, "external_run", side_effect=execute) as run, \
@@ -453,10 +455,159 @@ class CommandLineContracts(unittest.TestCase):
                 first, _ = backflat.cached_starless(source, image, fits.Header(), "sxt", None, cache)
                 probe.side_effect = RuntimeError("offline")
                 second, _ = backflat.cached_starless(source, image, fits.Header(), "sxt", None, cache)
-                np.testing.assert_array_equal(first, image*0.5)
+                np.testing.assert_array_equal(first, image[:, ::-1, :]*0.5)
                 np.testing.assert_array_equal(first, second)
                 self.assertEqual(run.call_count, 1)
                 self.assertEqual(probe.call_count, 1)
+
+
+class StarlessOrientationContracts(unittest.TestCase):
+    @staticmethod
+    def pair(shape=(257, 385), seed=42):
+        rng = np.random.default_rng(seed)
+        y, x = np.mgrid[:shape[0], :shape[1]]
+        texture = 150*ndimage.gaussian_filter(rng.normal(size=shape), 3)
+        sky = 2000+0.5*x+0.3*y+texture
+        starless = np.stack([sky, sky*1.2+30, sky*0.8-20])
+        stars = np.zeros(shape)
+        stars[rng.integers(0, shape[0], 150), rng.integers(0, shape[1], 150)] = 15000
+        stars = ndimage.gaussian_filter(stars, 0.9)
+        return starless+stars, starless
+
+    def test_known_pair_both_directions_and_intensity_scaling(self):
+        image, starless = self.pair()
+        for flip in (False, True):
+            for gain, offset in ((1, 0), (0.03, 1200), (7, -500)):
+                with self.subTest(flip=flip, gain=gain):
+                    supplied = (starless[:, ::-1, :] if flip else starless)*gain+offset
+                    before = supplied.copy()
+                    actual, decision = backflat.orient_starless(image, supplied)
+                    self.assertEqual(decision["flip_y"], flip)
+                    np.testing.assert_array_equal(actual, starless*gain+offset)
+                    np.testing.assert_array_equal(supplied, before)
+                    if not flip:
+                        self.assertIs(actual, supplied)
+
+    def test_odd_size_reduction_commutes_with_flip_and_removes_plane(self):
+        image, _ = self.pair((1033, 1247))
+        a = backflat.orientation_preview(image)
+        b = backflat.orientation_preview(image[:, ::-1, :])
+        self.assertLessEqual(max(a.shape), 1024)
+        np.testing.assert_allclose(a[::-1], b, atol=1e-14, rtol=0)
+        y, x = np.mgrid[:1033, :1247]
+        planar = np.broadcast_to(4000+3*x-2*y, (3, 1033, 1247)).copy()
+        with self.assertRaisesRegex(backflat.StarlessOrientationError, "insufficient"):
+            backflat.orient_starless(planar, planar[:, ::-1, :])
+
+    def test_flat_symmetric_nearly_symmetric_and_unrelated_are_ambiguous(self):
+        image, starless = self.pair()
+        symmetric = (starless+starless[:, ::-1, :])/2
+        unrelated = self.pair(seed=180)[1]
+        cases = [(image, symmetric), (symmetric, symmetric+0.001*(starless-symmetric)),
+                 (np.ones_like(image), np.ones_like(image)), (image, unrelated)]
+        for source, supplied in cases:
+            with self.subTest(variation=float(np.std(supplied))):
+                with self.assertRaisesRegex(backflat.StarlessOrientationError, "--starless-flip-y"):
+                    backflat.orient_starless(source, supplied)
+
+    def test_manual_overrides_are_explicit_and_mutually_exclusive(self):
+        image = np.arange(3*9*13).reshape(3, 9, 13).astype(np.float64)
+        for mode in ("no-flip", "flip-y"):
+            actual, decision = backflat.orient_starless(image, image, mode)
+            np.testing.assert_array_equal(actual, image[:, ::-1, :] if mode == "flip-y" else image)
+            self.assertEqual(decision["scores"], [])
+            self.assertEqual(decision["mode"], mode)
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            backflat.parse_args(["backflat", "input.fit", "output.fit", "--starless", "starless.fit",
+                                 "--starless-flip-y", "--starless-no-flip"])
+
+    def test_cli_records_decision_and_preserves_input_mask_coordinates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            image, starless = self.pair()
+            header = fits.Header({"CRPIX1": 90.5, "CRPIX2": 120.5})
+            fits.PrimaryHDU(image, header).writeto(folder/"input.fit")
+            mask = np.zeros(image.shape[1:], dtype=np.uint16)
+            mask[30:45, 60:100] = 65535
+            fits.PrimaryHDU(mask).writeto(folder/"mask.fit")
+            backgrounds = []
+            for flipped in (False, True):
+                source = folder/("flipped.fit" if flipped else "aligned.fit")
+                fits.PrimaryHDU(starless[:, ::-1, :] if flipped else starless).writeto(source)
+                output = folder/str(flipped)/"output.fit"
+                args = ["backflat", str(folder/"input.fit"), str(output), "--starless", str(source),
+                        "--mask", str(folder/"mask.fit"), "--no-gui"]
+                log, error = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(log), contextlib.redirect_stderr(error):
+                    self.assertEqual(backflat.main(args), 0, error.getvalue())
+                self.assertEqual("Corrected starless Y orientation" in log.getvalue(), flipped)
+                with fits.open(output, memmap=False) as hdus:
+                    history = str(hdus[0].header["HISTORY"])
+                    self.assertIn("applied="+("flip-y" if flipped else "as-is"), history)
+                    self.assertIn("hp-corr-v1", history)
+                    self.assertIn("corr as-is=", history)
+                    self.assertEqual(hdus[0].header["CRPIX2"], 120.5)
+                with fits.open(output.parent/"back_mask.fit", memmap=False) as hdus:
+                    np.testing.assert_array_equal(hdus["RAWMASK"].data, mask)
+                backgrounds.append(fits.getdata(output.parent/"background.fit", memmap=False))
+            np.testing.assert_array_equal(*backgrounds)
+
+    def test_all_engine_sources_and_cache_use_the_same_measured_orientation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            image, starless = self.pair((513, 769))
+            source, executable = folder/"input.fit", folder/"engine.exe"
+            fits.PrimaryHDU(image).writeto(source)
+            executable.write_bytes(b"simulated engine")
+            scale = max(float(np.max(np.abs(image))), 1)
+            for engine in ("sxt", "starnet"):
+                for flip in (False, True):
+                    raw = (starless[:, ::-1, :] if flip else starless)/scale
+                    def execute(command, **kwargs):
+                        output_flag = "-o" if engine == "sxt" else "--output"
+                        fits.PrimaryHDU(raw).writeto(command[command.index(output_flag)+1])
+                        return ""
+                    with self.subTest(engine=engine, flip=flip), \
+                         mock.patch.object(backflat.shutil, "which", return_value=str(executable)), \
+                         mock.patch.object(backflat, "discover_engine", return_value=(str(executable), "test")) as probe, \
+                         mock.patch.object(backflat, "external_run", side_effect=execute), \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        cache = str(folder/(engine+str(flip)))
+                        loaded, _ = backflat.cached_starless(str(source), image, fits.Header(), engine, None, cache)
+                        actual, decision = backflat.orient_starless(image, loaded)
+                        self.assertEqual(decision["flip_y"], flip)
+                        np.testing.assert_allclose(actual, starless, atol=1e-12)
+                        probe.side_effect = RuntimeError("must use cache")
+                        loaded, _ = backflat.cached_starless(str(source), image, fits.Header(), engine, None, cache)
+                        again, repeated = backflat.orient_starless(image, loaded)
+                        np.testing.assert_array_equal(actual, again)
+                        self.assertEqual(decision, repeated)
+
+    def test_batch_stops_at_changed_or_ambiguous_orientation(self):
+        for modes in ((True, True), (False, True, False), (False, "symmetric", False)):
+            with self.subTest(modes=modes), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory)
+                image, starless = self.pair()
+                fits.PrimaryHDU(np.zeros(image.shape[1:], dtype=np.uint16)).writeto(folder/"mask.fit")
+                for i, mode in enumerate(modes, 1):
+                    supplied = ((starless+starless[:, ::-1, :])/2 if mode == "symmetric" else
+                                starless[:, ::-1, :] if mode else starless)
+                    fits.PrimaryHDU(image).writeto(folder/("input%04d.fit" % i))
+                    fits.PrimaryHDU(supplied).writeto(folder/("stars%04d.fit" % i))
+                args = ["backflat", str(folder/"input0001.fit"), str(folder/"output0001.fit"),
+                        "--starless", str(folder/"stars0001.fit"), "--mask", str(folder/"mask.fit"), "--no-gui"]
+                log, error = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(log), contextlib.redirect_stderr(error):
+                    status = backflat.main(args)
+                self.assertEqual(status, 0 if len(modes) == 2 else 1, error.getvalue())
+                self.assertTrue((folder/"output0001.fit").is_file())
+                if status:
+                    self.assertIn("ambiguous" if modes[1] == "symmetric" else "Inconsistent", error.getvalue())
+                    self.assertFalse((folder/"output0002.fit").exists())
+                    self.assertFalse((folder/"output0003.fit").exists())
+                    self.assertFalse((folder/"output0002_backflat"/"back_mask.fit").exists())
+                else:
+                    self.assertTrue((folder/"output0002.fit").is_file())
 
 
 class CacheCleanupContracts(unittest.TestCase):
@@ -481,7 +632,8 @@ class CacheCleanupContracts(unittest.TestCase):
                 cache = folder/".backflat-cache"
                 self.cache_file(cache)  # Also remove recognized leftovers from an earlier run.
                 args = ["backflat", str(folder/"input.fit"), str(folder/"output.fit"),
-                        "--sxt", "--sxt-exe", str(executable), "--mask", str(folder/"mask.fit")]
+                        "--sxt", "--sxt-exe", str(executable), "--mask", str(folder/"mask.fit"),
+                        "--starless-no-flip"]
                 if outcome != "gui":
                     args.append("--no-gui")
 
@@ -528,7 +680,7 @@ class CacheCleanupContracts(unittest.TestCase):
             (cache/"nested"/"keep.txt").write_bytes(b"unrelated nested file")
             fits.PrimaryHDU(np.zeros((9, 13))).writeto(folder/"mask.fit")
             args = ["backflat", str(source), str(folder/"output.fit"), "--starless", str(source),
-                    "--cache-dir", str(cache), "--mask", str(folder/"mask.fit"), "--no-gui"]
+                    "--cache-dir", str(cache), "--mask", str(folder/"mask.fit"), "--no-gui", "--starless-no-flip"]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(backflat.main(args), 0)
             self.assertFalse(old.exists())

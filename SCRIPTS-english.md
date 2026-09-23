@@ -609,7 +609,7 @@ backflat.py input_spec output_spec --sxt [options]
 backflat.py input_spec output_spec --starnet [options]
 ```
 
-The primary workflow is `--starless`: supply a matching, registered starless RGB FITS in the same intensity units. Input layout is `(3,H,W)`. Integer and floating FITS are accepted; floats need not be normalized. Shared `batch_utils` input rules apply: single, `=single`, sequence, wildcard, list. A starless batch must match the input count; one mask may be shared by a batch.
+The primary workflow is `--starless`: supply a matching starless RGB FITS in the same intensity units, registered apart from a possible Y reversal. Input layout is `(3,H,W)`. Integer and floating FITS are accepted; floats need not be normalized. Shared `batch_utils` input rules apply: single, `=single`, sequence, wildcard, list. A starless batch must match the input count; one mask may be shared by a batch.
 
 **Saving:** successful completion always writes three files: the corrected image `output_spec`, the background model `background.fit` and the mask `back_mask.fit`. Default background/mask paths are beside a single corrected output, or in a separate `<output_stem>_backflat/` directory per batch output. `--out-back SPEC` and `--out-mask SPEC` override these destinations. Batch overrides use standard numbered output patterns or directories; explicit relative paths are relative to the working directory. `--mask SPEC` only selects the input mask.
 
@@ -646,7 +646,9 @@ All pixel sizes refer to diagonal 7515 px (approximately 6248x4176) and scale by
 | `--out-back SPEC` | background.fit | Override the saved background model path |
 | `--out-mask SPEC` | back_mask.fit | Override the saved mask path |
 | `-y`, `--overwrite` | off | Allow replacing existing output files |
-| `--starless SPEC` | none | Matching starless images; primary workflow |
+| `--starless SPEC` | none | Matching starless images; Y orientation is checked |
+| `--starless-flip-y` | off | Force Y reversal of starless data instead of measuring |
+| `--starless-no-flip` | off | Keep starless row order without checking |
 | `--sxt` / `--starnet` | off | Alternative to `--starless`; choose exactly one source |
 | `--sxt-exe FILE` / `--starnet-exe FILE` | search PATH | Selected external engine executable |
 | `--cache-dir DIR` | .backflat-cache beside mask | Temporary cache; cleaned when the run ends |
@@ -687,7 +689,13 @@ Cleanup recognizes 64-hex-digit FITS filenames with `backflat starless cache:` i
 
 Within a session, the starless image and latest preparation remain in RAM: parameter changes never rerun the external engine, and stage-C changes reuse the preparation.
 
-**Dependencies**: numpy, astropy, scipy; `diplib==3.6.1` for `fast`, pygame for GUI. `--no-gui --median-mode exact` needs neither of the last two. External engines and their models are not PULSAR dependencies and are never installed or activated by this script. `--sxt` uses a licensed RC-Astro CLI (`--sxt-exe FILE` overrides PATH). `--starnet` uses StarNet2 with FITS and `--linear` support (2.6+; `--starnet-exe FILE` overrides PATH); legacy TIFF-only StarNet++ is rejected. See [RC-Astro](https://www.rc-astro.com/) and the [official StarNet CLI reference](https://starnetastro.com/documentation/starnet/command-line-tool/). Engines receive a reversibly scaled common RGB range and results are returned to original units. `--starless` works without either engine. The `--sxt` adapter reverses output rows along Y (`data[:, ::-1, :]`) to correct RC-Astro CLI FITS orientation before masking and caching. Older SxT caches without this correction are not reused. A supplied `--starless` file must already match the input orientation; it is not flipped automatically.
+**Starless orientation:** all three sources (`--starless`, `--sxt`, `--starnet`), including cached frames, use the same check before preparation, mask loading or opening the editor. The supplied row order is compared with a Y reversal. Measurement uses an area-averaged RGB preview up to 1024 pixels, linear detrending, high-pass features at two scales and robust limiting of bright stars in the measurement copy only. Both scales must prefer the same orientation by a correlation gap of at least 0.05. A confident Y reversal is applied and logged; a correctly oriented image passes without an extra message. The decision, method and correlations are recorded in both image outputs' HISTORY.
+
+Symmetric/flat fields, previews smaller than 32 pixels on the short side or conflicting scores stop the run with an explanation. Mutually exclusive `--starless-flip-y` and `--starless-no-flip` force a Y reversal or keep the row order without measuring. They apply to the supplied file or raw engine output: there is no additional SxT-specific flip. Masks remain in input-image coordinates. Only Y reversal is tested; X reversal, shifts, rotation and geometric scale are not solved. Matching dimensions, registration apart from Y reversal, and intensity units are still required.
+
+Each batch pair is checked; a changed required orientation or an ambiguous pair stops the whole batch. Earlier completed outputs remain. Calibration on NGC 300 and controlled variations gave 0.303 versus 0.015 and 0.298 versus 0.055 at the two scales, taking about 0.7–0.8 s on RGB 6248x4176. This is limited calibration, not a guarantee for arbitrary fields. See the [implementation notes](Backflat/DEVELOPMENT.md) (Russian).
+
+**Dependencies**: numpy, astropy, scipy; `diplib==3.6.1` for `fast`, pygame for GUI. `--no-gui --median-mode exact` needs neither of the last two. External engines and their models are not PULSAR dependencies and are never installed or activated by this script. `--sxt` uses a licensed RC-Astro CLI (`--sxt-exe FILE` overrides PATH). `--starnet` uses StarNet2 with FITS and `--linear` support (2.6+; `--starnet-exe FILE` overrides PATH); legacy TIFF-only StarNet++ is rejected. See [RC-Astro](https://www.rc-astro.com/) and the [official StarNet CLI reference](https://starnetastro.com/documentation/starnet/command-line-tool/). Engines receive a reversibly scaled common RGB range and results are returned to original units. `--starless` works without either engine. Every source uses the orientation check described above. The cache retains raw engine row order; the `backflat-starless-v3-raw-y` key rejects older conventions, including `:sxt-flip-y-v1`. Cached frames pass through the same check on each read, preventing cumulative flips. Real StarNet2 was unavailable in the development environment; its adapter and both row orders were tested with a simulated engine.
 
 ```bash
 backflat rgb.fit corrected.fit --starless starless.fit
