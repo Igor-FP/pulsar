@@ -21,6 +21,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **ngain.py** | Gain normalization (scale median to target value) |
 | **noffset.py** | Offset normalization (shift median to target value) |
 | **autoflat.py** | Background field flattening |
+| **backflat.py** | RGB background flattening using a starless image, an object mask and masked diffusion |
 | **cosme.py** | Hot pixel correction from coordinate list |
 | **make_cosme.py** | Hot pixel list generation from dark frame |
 | **makedark.py** | Master dark and cosme.lst creation from raw darks |
@@ -595,6 +596,108 @@ autoflat input.fit output.fit
 autoflat input.fit output.fit --poly 4 --mask-center
 autoflat --mode 2 input.fit output.fit
 ```
+
+---
+
+### backflat.py
+
+**Purpose**: Build a Masked Diffusion Background (MDB; Russian: FMF) from an RGB composite and subtract it channel by channel while adding the same neutral background level to R, G and B. Circular medians and Gaussian filters act on the starless image; extended objects are masked manually and filled from fixed shores. No polynomial or background-sampling grid is fitted.
+
+```text
+backflat.py input_spec output_spec --starless starless_spec [options]
+backflat.py input_spec output_spec --sxt [options]
+backflat.py input_spec output_spec --starnet [options]
+```
+
+The primary workflow is `--starless`: supply a matching, registered starless RGB FITS in the same intensity units. Input layout is `(3,H,W)`. Integer and floating FITS are accepted; floats need not be normalized. Shared `batch_utils` input rules apply: single, `=single`, sequence, wildcard, list. A starless batch must match the input count; one mask may be shared by a batch.
+
+**Saving:** successful completion always writes three files: the corrected image `output_spec`, the background model `background.fit` and the mask `back_mask.fit`. Default background/mask paths are beside a single corrected output, or in a separate `<output_stem>_backflat/` directory per batch output. `--out-back SPEC` and `--out-mask SPEC` override these destinations. Batch overrides use standard numbered output patterns or directories; explicit relative paths are relative to the working directory. `--mask SPEC` only selects the input mask.
+
+If any output already exists, the entire run stops **before processing or opening the editor**, listing the files. Use `--overwrite` or `-y` to allow replacement, including when reopening a saved mask archive. Repeated saves of a mask already written in the current session are allowed.
+
+Both the **result and background are float32**, with float64 calculations. The full RGB model is subtracted per channel, then the mean of its three channel means is added equally to R, G and B:
+```text
+K = (mean(background[R]) + mean(background[G]) + mean(background[B])) / 3
+out[c] = image[c] - background[c] + K
+```
+This avoids restoring the model's constant color bias. The overall RGB mean is preserved, rather than each channel mean. Residual sky neutrality depends on the accuracy of the model; K does not remove noise or modeling errors.
+Negative values are retained. Zeros are ordinary samples, not an implicit coverage mask. Non-finite input/output samples are replaced with zero with a warning. Observation/WCS headers are retained; storage cards are regenerated and HISTORY records the parameters, mask, starless source, median backend and absence of quantization. Output paths must not overwrite an input image.
+
+All pixel sizes refer to diagonal 7515 px (approximately 6248x4176) and scale by `hypot(W,H)/7515`. Median sizes are **circular diameters**. Gaussian sizes are **FWHM**, with `sigma = FWHM / sqrt(8*ln(2))`.
+
+| Option | Default | Meaning |
+|---|---:|---|
+| `--median1 D` | 40 | First circular median of the starless image |
+| `--edge F` | 0.025 | Mirrored strip width as a diagonal fraction; left/right, then top/bottom |
+| `--blur1 D` | 40 | Preparation Gaussian FWHM |
+| `--median2 D` | 60 | Second circular median |
+| `--median-mode MODE` | fast | `fast`: DIPlib; `exact`: SciPy reference. Both float64, no quantization |
+| `--median2-scale N` | 4 | Maximum second-median spatial reduction per axis: 1, 2 or 4 |
+| `--diffusion-scale N` | 4 | Maximum diffusion reduction: 1, 2 or 4; 1 is full resolution |
+| `--lake-mask D` | 100 | Gaussian FWHM of the lake blending mask, followed by auto-levels to 0..1 |
+| `--lake-blur D` | 250 | Filled-lake Gaussian FWHM |
+| `--blur D` | 60 | Global Gaussian FWHM |
+| `--center-plateau F` | 0.5 | Threshold as a fraction of maximum distance to the nearest side |
+| `--center-mask D` | 150 | Central mask Gaussian FWHM |
+| `--center-blur D` | 225 | Additional central Gaussian FWHM |
+| `--margin D` | 1% diagonal | Object-mask margin; explicit D uses reference pixels |
+| `--mask SPEC` | existing archive | Mono opacity mask; any positive sample excludes the pixel |
+| `--no-gui` | off | Headless calculation, requiring an existing mask |
+| `--out-back SPEC` | background.fit | Override the saved background model path |
+| `--out-mask SPEC` | back_mask.fit | Override the saved mask path |
+| `-y`, `--overwrite` | off | Allow replacing existing output files |
+| `--starless SPEC` | none | Matching starless images; primary workflow |
+| `--sxt` / `--starnet` | off | Alternative to `--starless`; choose exactly one source |
+| `--sxt-exe FILE` / `--starnet-exe FILE` | search PATH | Selected external engine executable |
+| `--cache-dir DIR` | .backflat-cache beside mask | Temporary cache; cleaned when the run ends |
+| `-h`, `--help` | — | Full built-in help |
+
+**Precision and acceleration**: fast uses [DIPlib](https://diplib.org/diplib-docs/nonlinear.html) (Apache 2.0); exact uses SciPy. The first circular median always runs at full resolution. Fast mode defaults to up to 4x spatial reduction per axis for the second median, after the preparation Gaussian: float64 block averages are filtered and bilinearly reconstructed at the original pixel centers. Intensities are neither quantized nor clipped. Final float32 storage is a separate rounding step.
+
+Diffusion also defaults to up to 4x spatial reduction. Only known, unmasked sky contributes to block averages, including partially covered blocks; masked source values are excluded before reduction. Original full-resolution shores are restored exactly after interpolation. Lake, global and center filters run at full resolution. Reduction automatically retains at least 2 samples per coverage sigma; the second median additionally needs 12 samples per diameter and 2 per preparation Gaussian sigma. Small images/kernels reduce less or stay full-size.
+
+Use `--median2-scale 1 --diffusion-scale 1` for computation without spatial reduction, or 2 for an intermediate setting. `--median-mode exact` selects SciPy and forces full-size medians; diffusion scale is controlled separately. On the supplied RGB 6248x4176 image, the new defaults reduced computation from about 599 to 74 s; background differences were RMS 0.003, maximum 0.033 in original intensity units. These measurements apply to that image and hardware.
+
+**Progress log**: timestamps and durations cover FITS reads, both medians, mirrored borders, Gaussian filters, diffusion, masks, blends, subtraction and writes. Long median/diffusion stages report channel/rows or iteration approximately every 5 s. The GUI shows the active operation and elapsed time while computing. All console output is ASCII and can be redirected to a file.
+
+**Processing**: first median, mirrored borders, preparation Gaussian, second median; then iterative Gaussian hole filling, lake blending, global blur and mandatory central blur. The fill propagates support with FWHM 20 and normalized supported RGB with FWHM 80, densifies alpha by 2, and restores unmasked samples every iteration. Masked source values never participate. The filled region is blurred at FWHM 250 and blended through the object mask blurred at FWHM 100, then linearly auto-leveled using its own min/max: `(mask-min)/(max-min)`, without percentile clipping. Empty masks remain zero; constant masks do not amplify numerical noise. It stops when the holes close; this is progressive Gaussian filling, not a claim of an exact Laplace solution. A fully masked image is rejected; an empty mask is allowed. The central mask comes from distance to the rectangular image boundary; black-point correction keeps every boundary pixel at zero.
+
+**GUI**: pygame only. The prepared image fits the viewport; reduced intensity views use block averages. MTF is display-only. The full-resolution mask is white at 20% opacity, with a separate margin outline.
+
+| Control | Action |
+|---|---|
+| Left/right mouse | Paint/erase |
+| Wheel / Shift+wheel | Brush diameter +/-1 / +/-10 image pixels |
+| `+` / `-`, middle drag | Zoom at cursor / pan |
+| Home/End | MTF brighter/darker, factor 1.4 |
+| M, Ctrl+Z | Toggle mask / undo one stroke |
+| Tab | Mask / parameter mode |
+| `1`, `2`, `3`, `4` | Original, prepared, background, corrected |
+| Click value | Type a number; Enter commits, Esc cancels editing |
+| Up/down, left/right | Select/change a parameter; Shift uses a fine step |
+| Apply, B, Enter | Save the mask and recompute previews; final images are written on exit |
+| S | Save mask without leaving |
+| Q, Esc, close | Apply, save mask, background and corrected image, exit |
+
+**Mask archive**: always saved at `--out-mask` or the default `back_mask.fit` path described above. The uint16 `0/65535` primary HDU is compatible with `makemask`/`blend`; `RAWMASK` stores editable strokes in the same uint16 format and `BFMARGIN` records the applied margin. Reopening does not compound the margin. When `RAWMASK` exists, it takes precedence: editing only the primary HDU externally does not change the editable mask. Ordinary masks without `RAWMASK` use the primary HDU. Masks are binary: finite positive values exclude pixels; empty masks are allowed, fully masked images are rejected. `--mask` supplies a source mask; an archive is still saved. An existing archive at the selected output path is reused automatically when replacement is allowed (`-y`), with its saved margin unless `--margin` is explicit. Choose a new `--out-mask` path or another output directory to start fresh.
+
+**Temporary cache**: only external star removal is cached on disk, keyed by source contents and executable identity. Default directory: `.backflat-cache` beside the mask output; override with `--cache-dir DIR`. After closing the editor and saving results, or on an error or Ctrl+C, recognized Backflat cache FITS files are deleted, followed by the empty directory. A batch is cleaned after the entire run. `--starless` creates no cache, but an old cache at the selected location is still cleaned. Argument/output preflight failures leave the cache untouched.
+
+Cleanup recognizes 64-hex-digit FITS filenames with `backflat starless cache:` in HISTORY. Input/output files, unrelated files, subdirectories and links are retained; a directory containing them remains. Cleanup permission errors are reported and produce a nonzero exit code. A force-killed process cannot guarantee cleanup. The next `--sxt`/`--starnet` invocation removes stars again; use `--starless FILE` for a permanent starless reference.
+
+Within a session, the starless image and latest preparation remain in RAM: parameter changes never rerun the external engine, and stage-C changes reuse the preparation.
+
+**Dependencies**: numpy, astropy, scipy; `diplib==3.6.1` for `fast`, pygame for GUI. `--no-gui --median-mode exact` needs neither of the last two. External engines and their models are not PULSAR dependencies and are never installed or activated by this script. `--sxt` uses a licensed RC-Astro CLI (`--sxt-exe FILE` overrides PATH). `--starnet` uses StarNet2 with FITS and `--linear` support (2.6+; `--starnet-exe FILE` overrides PATH); legacy TIFF-only StarNet++ is rejected. See [RC-Astro](https://www.rc-astro.com/) and the [official StarNet CLI reference](https://starnetastro.com/documentation/starnet/command-line-tool/). Engines receive a reversibly scaled common RGB range and results are returned to original units. `--starless` works without either engine. The `--sxt` adapter reverses output rows along Y (`data[:, ::-1, :]`) to correct RC-Astro CLI FITS orientation before masking and caching. Older SxT caches without this correction are not reused. A supplied `--starless` file must already match the input orientation; it is not flipped automatically.
+
+```bash
+backflat rgb.fit corrected.fit --starless starless.fit
+backflat rgb.fit corrected.fit --starless starless.fit --out-back sky.fit --out-mask objects.fit
+backflat rgb.fit corrected.fit --starless starless.fit --mask back_mask.fit --no-gui -y
+backflat rgb.fit corrected.fit --sxt
+backflat rgb.fit corrected.fit --starless starless.fit --median-mode exact
+```
+
+Full-size medians and diffusion across large holes can take minutes. Apply runs in a worker thread so the window remains responsive; this is not a real-time filter. Implementation findings, measurements and limitations: [Backflat/DEVELOPMENT.md](Backflat/DEVELOPMENT.md) (Russian).
 
 ---
 

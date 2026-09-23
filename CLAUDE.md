@@ -73,6 +73,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | ngain.py | Normalize by gain (multiply to target median) |
 | noffset.py | Normalize by offset (add to target median) |
 | autoflat.py | Background field flattening (cell-based and min-binning modes) |
+| backflat.py | RGB masked diffusion background from a starless frame; circular medians, Gaussian FWHM diameters, pygame mask/parameter UI; float32 output: subtract full RGB background, add one common mean of its three channel means for a neutral pedestal |
 | autosolve.py | WCS solving and astrometric rectification (WSL-aware, RGB support, JPEG in→out with embedded WCS; --reuse-wcs reprojects from an existing WCS without re-solving; out-of-footprint pixels → 0) |
 | cosme.py | Hot pixel correction |
 | makedark.py | Meta-script: create master darks + cosme lists |
@@ -101,7 +102,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance), pygame (cometalign.py interactive GUI)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance), diplib (backflat.py --median-mode fast), pygame (cometalign.py and backflat.py interactive GUI)
 
 ## Running Tools
 

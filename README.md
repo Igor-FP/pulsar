@@ -131,6 +131,7 @@ pip install Pillow                     # fits2tiff, tiff2fits
 pip install rawpy exifread             # raw2fits (CR2 fallback reader)
 pip install reproject                  # autosolve (WCS reprojection)
 pip install opencv-python              # debayer (--method vng)
+pip install diplib==3.6.1 pygame        # backflat fast median + interactive GUI
 ```
 </details>
 
@@ -201,6 +202,13 @@ autosolve --rectify --align *.fit aligned\
 
 ## Script Reference
 
+`backflat` always saves the corrected image (second positional argument), `background.fit` and `back_mask.fit`. Use `--out-back` / `--out-mask` to change the additional output names. Existing outputs require `--overwrite` or `-y`; the check runs before processing. The full RGB background is subtracted per channel, then one common level (the mean of the three background channel means) is added to make the restored background neutral. The temporary `.backflat-cache` is cleaned at the end. See the [full reference](SCRIPTS-english.md#backflatpy) and [implementation notes](Backflat/DEVELOPMENT.md) (Russian).
+
+```batch
+backflat input.fit corrected.fit --starless starless.fit
+backflat input.fit corrected.fit --starless starless.fit --out-back sky.fit --out-mask objects.fit -y
+```
+
 | Script | Purpose |
 |--------|---------|
 | **add.py** | Add images/constants |
@@ -217,6 +225,7 @@ autosolve --rectify --align *.fit aligned\
 | **ngain.py** | Gain normalization (multiply to target median) |
 | **noffset.py** | Offset normalization (add to target median) |
 | **autoflat.py** | Background field flattening |
+| **backflat.py** | RGB background flattening with a starless reference, object mask and diffusion |
 | **cosme.py** | Hot pixel correction |
 | **make_cosme.py** | Hot pixel list generation |
 | **makedark.py** | Master dark creation |
@@ -301,6 +310,7 @@ PULSAR/
 ├── NGain/             # ngain.py
 ├── NOffset/           # noffset.py
 ├── Autoflat/          # autoflat.py
+├── Backflat/          # backflat.py (interactive masked diffusion background)
 ├── Cosme/             # cosme.py
 ├── MakeCosme/         # make_cosme.py
 ├── MakeDark/          # makedark.py
