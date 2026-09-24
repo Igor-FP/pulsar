@@ -49,6 +49,7 @@ import batch_utils
 
 
 DEFAULT_MTF_K = 0.25
+DEFAULT_OPACITY = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -57,49 +58,69 @@ DEFAULT_MTF_K = 0.25
 
 def usage():
     sys.stderr.write(
-        "blend - Combine two FITS images through an opacity mask.\n"
+        "blend - Combine two FITS images through an opacity mask and/or a flat opacity.\n"
         "\n"
         "Usage:\n"
-        "  blend.py source output mask operand [--mtf [K]] [--invert]\n"
+        "  blend.py source output mask operand [--mtf [K]] [--invert] [-o N]\n"
+        "  blend.py source output operand -o N [--mtf [K]] [--invert]      (no mask)\n"
         "\n"
         "Positional arguments (in this order):\n"
         "  source    - base image(s): single file, wildcard (*.fit), numbered\n"
         "              sequence (img0001.fit), or @list.txt\n"
         "  output    - single file, numbered pattern (out0001.fit), or directory\n"
-        "  mask      - greyscale opacity image (FITS file, or a sequence matching\n"
-        "              the source count). NOT a numeric constant.\n"
-        "  operand   - image blended in where the mask is bright: a FITS file, a\n"
+        "  mask      - greyscale opacity image (FITS file, or a sequence matching the\n"
+        "              source count). NOT a numeric constant. May be omitted only\n"
+        "              when -o/--opacity is given (then a flat opacity is used).\n"
+        "  operand   - image blended in where opacity is high: a FITS file, a\n"
         "              matching sequence, or a numeric constant (flat level).\n"
         "\n"
-        "Blend (m = mask normalized to [0, 1]):\n"
-        "  output = source * (1 - m) + operand * m\n"
-        "    white mask (m=1) -> operand, black mask (m=0) -> source,\n"
-        "    grey mask (m=0.5) -> mean of the two.\n"
-        "  The mask is scaled to [0, 1] by its own full scale: the dtype maximum\n"
-        "  for integer masks, 1.0 for float masks (a float mask must be in [0,1]).\n"
-        "  A colour mask is reduced to grey with (R + 2*G + B) / 4.\n"
+        "The operand's opacity at each pixel is m in [0, 1]:\n"
+        "  output = source * (1 - m) + operand * m    (m=1 -> operand, m=0 -> source)\n"
+        "\n"
+        "m is built in THIS ORDER:\n"
+        "  1. base: the mask, scaled to [0,1] by its own full scale (dtype maximum\n"
+        "     for integer masks, 1.0 for float masks - a float mask must be in\n"
+        "     [0,1]; a colour mask -> grey (R+2*G+B)/4). With no mask, the base is a\n"
+        "     flat 1.0 everywhere.\n"
+        "  2. --mtf [K]: reshape the base opacity's midtones (no effect on a flat\n"
+        "     base, which has no midtones).\n"
+        "  3. --invert: m -> 1 - m.\n"
+        "  4. -o N / --opacity N: multiply the whole result by N, applied LAST -\n"
+        "     'do everything as usual, but at N strength'.\n"
+        "\n"
+        "So -o only scales the FINAL opacity down:\n"
+        "  with a mask:    m = (mask, after MTF and invert) * N   -> a weaker mask\n"
+        "  without a mask: m = N on every pixel                   -> a flat N overlay\n"
         "\n"
         "Options:\n"
-        "  --mtf [K] - apply the MTF (midtone transfer function) to the mask in\n"
-        "              [0,1] BEFORE blending and BEFORE --invert. K is the midtones\n"
-        "              balance (0<K<1), same as mtf.py: K<0.5 brightens the mask\n"
-        "              (more operand), K>0.5 darkens it (more source). K defaults\n"
-        "              to 0.25 when omitted.\n"
-        "  --invert  - use the inverted mask (m -> 1 - m); applied AFTER --mtf.\n"
+        "  -o N, --opacity N  scale the final opacity by N, applied LAST (after --mtf\n"
+        "              and --invert). N is a fraction in [0,1], or a percent with a\n"
+        "              '%' suffix (e.g. 0.3 or 30%); N defaults to 0.5 when the flag\n"
+        "              is given without a value. With a mask this weakens it to N\n"
+        "              strength; with the mask argument omitted it gives a flat N\n"
+        "              opacity everywhere.\n"
+        "  --mtf [K] - apply the MTF (midtone transfer function) to the base opacity\n"
+        "              in [0,1], BEFORE --invert and BEFORE -o. K is the midtones\n"
+        "              balance (0<K<1), same as mtf.py: K<0.5 raises opacity (more\n"
+        "              operand), K>0.5 lowers it. K defaults to 0.25 when omitted.\n"
+        "  --invert  - use the inverted opacity (m -> 1 - m); applied AFTER --mtf\n"
+        "              and BEFORE -o.\n"
         "\n"
         "Examples:\n"
         "  blend base.fit out.fit mask.fit stars.fit\n"
-        "      blend stars.fit over base.fit where mask.fit is bright.\n"
-        "  blend base.fit out.fit mask.fit 0\n"
-        "      fade the masked regions toward 0 (operand = constant 0).\n"
-        "  blend base.fit out.fit mask.fit hi.fit --mtf 0.2\n"
-        "      brighten the mask midtones before blending (more of hi.fit).\n"
-        "  blend base.fit out.fit mask.fit hi.fit --invert\n"
-        "      blend where the mask is DARK instead of bright.\n"
+        "      blend stars.fit over base.fit where mask.fit is bright (full mask).\n"
+        "  blend base.fit out.fit mask.fit stars.fit -o 50%\n"
+        "      apply the same mask at half strength (mask * 0.5).\n"
+        "  blend base.fit out.fit stars.fit -o 30%\n"
+        "      flat 30% overlay of stars.fit (no mask).\n"
+        "  blend base.fit out.fit hi.fit -o 0.5\n"
+        "      an even 50/50 average of the two images.\n"
+        "  blend base.fit out.fit mask.fit hi.fit --mtf 0.2 --invert\n"
+        "      reshape then invert the mask before blending.\n"
         "\n"
         "source and operand must share shape and data scale; the output keeps the\n"
         "source dtype and header. 2D and 3-channel colour images are supported\n"
-        "(a mono mask is broadcast across channels).\n"
+        "(a mono mask or the flat opacity is broadcast across channels).\n"
     )
     sys.exit(1)
 
@@ -112,10 +133,41 @@ def _validate_mtf_k(value):
     return float(value)
 
 
+def _looks_numeric(token):
+    """True if the token parses as an opacity value (bare number or N%)."""
+    try:
+        float(token[:-1] if token.endswith("%") else token)
+        return True
+    except ValueError:
+        return False
+
+
+def _parse_opacity(spec):
+    """Flat opacity: a fraction in [0,1], or a percent with a '%' suffix."""
+    s = str(spec).strip()
+    if s.endswith("%"):
+        try:
+            value = float(s[:-1]) / 100.0
+        except ValueError:
+            sys.stderr.write("Error: --opacity percent must be a number before '%'.\n")
+            sys.exit(1)
+    else:
+        try:
+            value = float(s)
+        except ValueError:
+            sys.stderr.write("Error: --opacity must be a number in [0,1] or a percent like '30%'.\n")
+            sys.exit(1)
+    if not (0.0 <= value <= 1.0):      # also rejects NaN
+        sys.stderr.write("Error: --opacity must resolve to [0,1] (0..100%).\n")
+        sys.exit(1)
+    return value
+
+
 def parse_args(argv):
     args = argv[1:]
     invert = False
     mtf_k = None                 # None = MTF disabled
+    opacity = None               # None = mask mode; float in [0,1] = flat opacity
     positional = []
 
     i = 0
@@ -138,16 +190,51 @@ def parse_args(argv):
                     mtf_k = _validate_mtf_k(val)
                     i += 1
             continue
+        if a in ("-o", "--opacity"):
+            opacity = DEFAULT_OPACITY
+            i += 1
+            # optional N: consume the next token only if it looks like a value (N or N%)
+            if i < len(args) and not args[i].startswith("-") and _looks_numeric(args[i]):
+                opacity = _parse_opacity(args[i])
+                i += 1
+            continue
         if a.startswith("--"):
             sys.stderr.write(f"Error: unknown option: {a}\n")
             usage()
         positional.append(a)
         i += 1
 
+    if opacity is not None:
+        # -o scales the final opacity; the mask is OPTIONAL in this mode.
+        #   4 positionals -> weaken a mask (mask * N)
+        #   3 positionals -> flat N opacity (no mask)
+        if len(positional) == 4:
+            source, output, mask, operand = positional
+        elif len(positional) == 3:
+            source, output, operand = positional
+            mask = None
+        else:
+            sys.stderr.write(
+                "Error: with -o/--opacity need 4 positional arguments "
+                "(source output mask operand) to weaken a mask, or 3 "
+                "(source output operand) for a flat opacity; "
+                f"got {len(positional)}.\n")
+            usage()
+        return {
+            "source": source,
+            "output": output,
+            "mask": mask,
+            "operand": operand,
+            "invert": invert,
+            "mtf_k": mtf_k,
+            "opacity": opacity,
+        }
+
     if len(positional) != 4:
         sys.stderr.write(
             "Error: need exactly 4 positional arguments: source output mask operand "
-            f"(got {len(positional)}).\n")
+            f"(got {len(positional)}); or use -o/--opacity N for a flat opacity "
+            "(source output operand).\n")
         if mtf_k is not None:
             sys.stderr.write(
                 "Hint: if the operand is a numeric constant, give --mtf an explicit K "
@@ -161,6 +248,7 @@ def parse_args(argv):
         "operand": positional[3],
         "invert": invert,
         "mtf_k": mtf_k,
+        "opacity": None,
     }
 
 
@@ -272,7 +360,7 @@ def _spatial_shape(data):
     raise ValueError(f"unsupported source shape {data.shape}")
 
 
-def process_file(sfile, ofile, mask_spec, operand_spec, index, invert, mtf_k):
+def process_file(sfile, ofile, mask_spec, operand_spec, index, invert, mtf_k, opacity):
     with fits.open(sfile, memmap=False) as hdul:
         sdata = hdul[0].data
         header = hdul[0].header.copy()
@@ -282,13 +370,21 @@ def process_file(sfile, ofile, mask_spec, operand_spec, index, invert, mtf_k):
     orig_dtype = sdata.dtype
     spatial = _spatial_shape(sdata)
 
-    # Mask -> opacity m in [0,1], then optional MTF, then optional invert.
-    mask_path = batch_utils.get_operand_for_file(mask_spec, index)
-    m = load_mask(mask_path, spatial)
+    # Base opacity m in [0,1]: the mask (scaled), or a flat 1.0 when no mask is
+    # given. Pipeline order: MTF -> invert -> scale by the flat opacity N (LAST).
+    if mask_spec is not None:
+        mask_path = batch_utils.get_operand_for_file(mask_spec, index)
+        m = load_mask(mask_path, spatial)
+        m_desc = f"mask={os.path.basename(mask_path)}"
+    else:
+        m = np.full(spatial, 1.0, dtype=np.float64)
+        m_desc = "mask=none"
     if mtf_k is not None:
         m = apply_mtf(m, mtf_k)
     if invert:
         m = 1.0 - m
+    if opacity is not None:
+        m = m * float(opacity)          # weaken the final opacity to N strength (last)
 
     # Operand (constant or file), matched to the full source shape.
     operand_raw = batch_utils.get_operand_for_file(operand_spec, index)
@@ -304,11 +400,14 @@ def process_file(sfile, ofile, mask_spec, operand_spec, index, invert, mtf_k):
         op_desc = f"{float(operand_raw):g}"
     else:
         op_desc = os.path.basename(operand_raw)
-    parts = [f"mask={os.path.basename(mask_path)}", f"operand={op_desc}"]
+    parts = [m_desc]
     if mtf_k is not None:
         parts.append(f"mtf K={mtf_k:g}")
     if invert:
         parts.append("inverted")
+    if opacity is not None:
+        parts.append(f"opacity x{opacity:g}")
+    parts.append(f"operand={op_desc}")
     header["HISTORY"] = ("blend.py: out = source*(1-m) + operand*m; "
                          + ", ".join(parts))
 
@@ -336,16 +435,18 @@ def main():
 
     total = len(io_pairs)
 
-    try:
-        mask_spec = batch_utils.build_operand_spec(cfg["mask"], total)
-    except Exception as e:
-        sys.stderr.write(f"Error (mask): {e}\n")
-        sys.exit(1)
-    if isinstance(mask_spec, float):
-        sys.stderr.write(
-            "Error: mask must be a FITS file (or a matching sequence), "
-            "not a numeric constant.\n")
-        sys.exit(1)
+    mask_spec = None
+    if cfg["mask"] is not None:
+        try:
+            mask_spec = batch_utils.build_operand_spec(cfg["mask"], total)
+        except Exception as e:
+            sys.stderr.write(f"Error (mask): {e}\n")
+            sys.exit(1)
+        if isinstance(mask_spec, float):
+            sys.stderr.write(
+                "Error: mask must be a FITS file (or a matching sequence), "
+                "not a numeric constant.\n")
+            sys.exit(1)
 
     try:
         operand_spec = batch_utils.build_operand_spec(cfg["operand"], total)
@@ -356,7 +457,7 @@ def main():
     for i, (sfile, ofile) in enumerate(io_pairs, start=1):
         try:
             process_file(sfile, ofile, mask_spec, operand_spec, i - 1,
-                         cfg["invert"], cfg["mtf_k"])
+                         cfg["invert"], cfg["mtf_k"], cfg["opacity"])
             sys.stderr.write(f"\rProcessed {i} / {total}")
             sys.stderr.flush()
         except Exception as e:

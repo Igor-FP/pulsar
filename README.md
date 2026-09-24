@@ -237,6 +237,7 @@ backflat input.fit corrected.fit --starless starless.fit --out-back sky.fit --ou
 | **tiff2fits.py** | TIFF to FITS conversion |
 | **raw2fits.py** | Camera RAW to FITS conversion (currently Canon CR2/CR3) |
 | **staralign.py** | Star-based image registration |
+| **cometalign.py** | Comet-nucleus alignment of a star-aligned sequence (GUI or headless) |
 | **fft_align.py** | FFT-based alignment |
 | **absession.py** | AstroBin acquisition session CSV |
 | **binxy.py** | Software 2×2 / 4×4 pixel binning |
@@ -246,7 +247,7 @@ backflat input.fit corrected.fit --starless starless.fit --out-back sky.fit --ou
 | **hotfix.py** | Remove single hot (and cold) pixels |
 | **mtf.py** | Nonlinear brightness stretch with auto levels |
 | **makemask.py** | Build processing masks (percentile/absolute black-white clip + stretch, grow/shrink, invert) |
-| **blend.py** | Combine two images through an opacity mask (out = source*(1-m) + operand*m; --mtf, --invert) |
+| **blend.py** | Combine two images through an opacity mask or a flat opacity -o N (out = source*(1-m) + operand*m; --mtf, --invert) |
 | **lrgb.py** | Combine luminance channel with RGB color |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 
@@ -322,6 +323,7 @@ PULSAR/
 ├── Tiff2fits/         # tiff2fits.py
 ├── Raw2fits/          # raw2fits.py
 ├── Staralign/         # staralign.py
+├── CometAlign/        # cometalign.py
 ├── FFT_Align/         # fft_align.py
 ├── Absession/         # absession.py
 ├── Binxy/             # binxy.py

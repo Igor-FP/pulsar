@@ -43,7 +43,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
 | **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
 | **makemask.py** | Mask making: greyscale, black/white clip (percentile or absolute) + stretch, morphological grow/shrink, invert |
-| **blend.py** | Combine two images through an opacity mask: out = source*(1-m) + operand*m; --mtf, --invert |
+| **blend.py** | Combine two images through an opacity mask (or a flat opacity `-o N`): out = source*(1-m) + operand*m; `-o`/`--opacity` scales the final opacity, --mtf, --invert |
 | **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
@@ -1774,24 +1774,40 @@ Mask normalization: scaled to [0, 1] by its OWN full scale - the dtype maximum f
 
 **Syntax**:
 ```
-blend.py source output mask operand [--mtf [K]] [--invert]
+blend.py source output mask operand [--mtf [K]] [--invert] [-o N]
+blend.py source output operand -o N [--mtf [K]] [--invert]      (no mask)
 ```
+
+The final opacity `m` is built in THIS ORDER:
+1. base - the mask (normalized to [0,1]) or, if no mask is given, a flat `1.0`;
+2. `--mtf` - reshape the base opacity's midtones;
+3. `--invert` - `m -> 1 - m`;
+4. `-o N` - multiply the whole result by `N`, applied LAST.
+
+So `-o` only scales the FINAL opacity down ("do everything as usual, but at N strength"): with a mask -> a weaker mask (`m*N`), without a mask -> a flat `N`.
 
 **Parameters**:
 - `source` - base image(s): single file, wildcard (*.fit), numbered, or @list.txt
 - `output` - single file, numbered pattern, or directory
-- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant.
-- `operand` - image blended in where the mask is bright: a FITS file, a matching sequence, or a numeric constant (flat level)
-- `--mtf [K]` - apply the MTF (midtone transfer function) to the mask in [0,1] BEFORE blending and BEFORE `--invert`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 brightens the mask (more operand), K>0.5 darkens it (more source). K defaults to 0.25 when omitted.
-- `--invert` - use the inverted mask (m -> 1 - m); applied AFTER `--mtf`
+- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant. May be omitted ONLY together with `-o/--opacity` (then a flat opacity is used).
+- `operand` - image blended in where opacity is high: a FITS file, a matching sequence, or a numeric constant (flat level)
+- `-o N`, `--opacity N` - multiply the final opacity by `N`, applied LAST (after `--mtf` and `--invert`). `N` is a fraction in [0,1] or a percent with a `%` suffix (e.g. `0.3` or `30%`); `N` defaults to `0.5` when the flag is given without a value. With a mask it weakens it to N strength; with the mask argument omitted it gives a flat opacity `N`.
+- `--mtf [K]` - apply the MTF to the BASE opacity in [0,1], BEFORE `--invert` and BEFORE `-o`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 raises opacity (more operand), K>0.5 lowers it. K defaults to 0.25 when omitted. On a flat `1.0` base (no mask) MTF has no effect - it has no midtones.
+- `--invert` - use the inverted opacity (`m -> 1 - m`); AFTER `--mtf`, BEFORE `-o`. With no mask, inverting the flat `1.0` gives `0` (nothing is blended in).
 
 **Examples**:
 ```bash
 # Blend stars.fit over base.fit where mask.fit is bright
 blend base.fit out.fit mask.fit stars.fit
 
-# Fade the masked regions toward 0 (operand = constant 0)
-blend base.fit out.fit mask.fit 0
+# Apply the same mask at half strength (mask * 0.5)
+blend base.fit out.fit mask.fit stars.fit -o 50%
+
+# Flat 30% overlay of stars.fit (no mask)
+blend base.fit out.fit stars.fit -o 30%
+
+# An even 50/50 average of the two images
+blend base.fit out.fit hi.fit -o 0.5
 
 # Brighten the mask midtones before blending (more of hi.fit)
 blend base.fit out.fit mask.fit hi.fit --mtf 0.2
@@ -1800,7 +1816,7 @@ blend base.fit out.fit mask.fit hi.fit --mtf 0.2
 blend base.fit out.fit mask.fit hi.fit --invert
 ```
 
-`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
+`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask or the flat opacity is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
 
 **Dependencies**: numpy/astropy only (batch_utils).
 
