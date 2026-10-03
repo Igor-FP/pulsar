@@ -8,7 +8,7 @@ A toolkit for batch processing of astronomical FITS images.
 
 | Script | Purpose |
 |--------|---------|
-| **add.py** | Addition: `result = input + operand + offset` |
+| **add.py** | Addition `result = input + operand + offset`; `--screen` = screen composite |
 | **sub.py** | Subtraction: `result = input - operand + offset` |
 | **mul.py** | Multiplication: `result = input * operand * scale` |
 | **div.py** | Division: `result = (input / operand) * scale` |
@@ -117,20 +117,22 @@ Arithmetic scripts (add, sub, mul, div, arith) support numeric constants as oper
 
 ### add.py
 
-**Purpose**: Add a value or image to input frames.
+**Purpose**: Add a value or image to input frames. The `--screen` mode does a screen composite instead of addition (the inverse of unscreen).
 
-**Formula**: `result = input + operand + offset`
+**Formula**: `result = input + operand + offset` (add) or `result = 1 - (1 - input) * (1 - operand)` (`--screen`)
 
 **Syntax**:
 ```
 add.py input_spec output_spec operand [offset]
+add.py input_spec output_spec operand --screen
 ```
 
 **Parameters**:
 - `input_spec` — input files
 - `output_spec` — output files
 - `operand` — numeric constant OR FITS file OR numbered FITS pattern
-- `offset` — optional numeric offset (default 0)
+- `offset` — optional numeric offset (default 0; add mode only)
+- `--screen` — screen composite instead of addition: `1 - (1 - input) * (1 - operand)`, elementwise, 2D and 3D (RGB). Float data is treated as [0,1] (white = 1.0); integer data uses its dtype range. Takes no offset. Used to recombine a stars layer onto a starless layer (inverse of unscreen).
 
 **Examples**:
 ```bash
@@ -138,6 +140,7 @@ add light0001.fit cal0001.fit 100
 add *.fit out0001.fit bias.fit
 add light0001.fit result0001.fit dark0001.fit 500
 add image.fit result.fit 1024           # add constant to all pixels
+add starless.fit combined.fit stars.fit --screen   # recombine stars (screen)
 ```
 
 ---

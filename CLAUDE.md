@@ -65,7 +65,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 
 | Tool | Purpose |
 |------|---------|
-| add.py, arith.py | Image arithmetic (add/sub/mul/div) |
+| add.py, arith.py | Image arithmetic (add/sub/mul/div); add.py `--screen` = screen composite `1-(1-a)(1-b)` (2D/RGB, inverse of unscreen) |
 | sum.py | Stack summation with exposure time handling |
 | med.py | Tiled parallel median combine |
 | calibrate.py | Dark/bias/flat/cosmetic calibration pipeline |

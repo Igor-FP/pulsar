@@ -129,7 +129,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td>add.py</td><td>Сложение: result = input + operand + offset</td></tr>
+                        <tr><td>add.py</td><td>Сложение: result = input + operand + offset; режим --screen — сборка методом screen</td></tr>
                         <tr><td>sub.py</td><td>Вычитание: result = input - operand + offset</td></tr>
                         <tr><td>mul.py</td><td>Умножение: result = input * operand * scale</td></tr>
                         <tr><td>div.py</td><td>Деление: result = (input / operand) * scale</td></tr>
@@ -233,13 +233,13 @@
 
                 <div class="script-card">
                     <h3>add.py <span class="badge">арифметика</span></h3>
-                    <p>Сложение значения или изображения с входными кадрами.</p>
+                    <p>Сложение значения или изображения с входными кадрами. Режим <code>--screen</code> вместо сложения выполняет сборку методом screen (обратную к unscreen).</p>
 
-                    <div class="formula">result = input + operand + offset</div>
+                    <div class="formula">result = input + operand + offset&nbsp;&nbsp;|&nbsp;&nbsp;--screen: 1 - (1 - input) * (1 - operand)</div>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>add.py input_spec output_spec operand [offset]</code>
+                        <code>add.py input_spec output_spec operand [offset] [--screen]</code>
                     </div>
 
                     <div class="params">
@@ -247,13 +247,15 @@
                         <div class="param"><span class="param-name">input_spec</span><span class="param-desc">входные файлы</span></div>
                         <div class="param"><span class="param-name">output_spec</span><span class="param-desc">выходные файлы</span></div>
                         <div class="param"><span class="param-name">operand</span><span class="param-desc">константа или FITS-файл</span></div>
-                        <div class="param"><span class="param-name">offset</span><span class="param-desc">смещение (по умолчанию 0)</span></div>
+                        <div class="param"><span class="param-name">offset</span><span class="param-desc">смещение (по умолчанию 0; только сложение)</span></div>
+                        <div class="param"><span class="param-name">--screen</span><span class="param-desc">сборка методом screen: 1-(1-a)(1-b), 2D и 3D; вещественное в [0,1], целое по диапазону типа; без offset</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>add light0001.fit cal0001.fit 100
 add *.fit out0001.fit bias.fit
-add image.fit result.fit 1024</code></pre>
+add image.fit result.fit 1024
+add starless.fit combined.fit stars.fit --screen</code></pre>
                 </div>
             </section>
 

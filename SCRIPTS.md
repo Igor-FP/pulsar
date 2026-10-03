@@ -8,7 +8,7 @@
 
 | Скрипт | Назначение |
 |--------|------------|
-| **add.py** | Сложение: `result = input + operand + offset` |
+| **add.py** | Сложение `result = input + operand + offset`; режим `--screen` — сборка методом screen |
 | **sub.py** | Вычитание: `result = input - operand + offset` |
 | **mul.py** | Умножение: `result = input * operand * scale` |
 | **div.py** | Деление: `result = (input / operand) * scale` |
@@ -116,20 +116,22 @@
 
 ### add.py
 
-**Назначение**: Сложение значения или изображения с входными кадрами.
+**Назначение**: Сложение значения или изображения с входными кадрами. Режим `--screen` вместо сложения выполняет сборку методом screen (обратную к unscreen).
 
-**Формула**: `result = input + operand + offset`
+**Формула**: `result = input + operand + offset` (сложение) либо `result = 1 - (1 - input) * (1 - operand)` (`--screen`)
 
 **Синтаксис**:
 ```
 add.py input_spec output_spec operand [offset]
+add.py input_spec output_spec operand --screen
 ```
 
 **Параметры**:
 - `input_spec` — входные файлы
 - `output_spec` — выходные файлы
 - `operand` — числовая константа ИЛИ FITS-файл ИЛИ нумерованный шаблон FITS
-- `offset` — опциональное числовое смещение (по умолчанию 0)
+- `offset` — опциональное числовое смещение (по умолчанию 0; только в режиме сложения)
+- `--screen` — сборка методом screen вместо сложения: `1 - (1 - input) * (1 - operand)`, поэлементно, для 2D и 3D (RGB). Вещественные данные считаются в [0,1] (белое = 1.0), целочисленные — по диапазону типа. Смещение не принимается. Используется для возврата слоя звёзд на слой без звёзд (обратно к unscreen).
 
 **Примеры**:
 ```batch
@@ -137,6 +139,7 @@ add light0001.fit cal0001.fit 100
 add *.fit out0001.fit bias.fit
 add light0001.fit result0001.fit dark0001.fit 500
 add image.fit result.fit 1024           :: добавить константу ко всем пикселям
+add starless.fit combined.fit stars.fit --screen   :: сборка звёзд обратно (screen)
 ```
 
 ---
