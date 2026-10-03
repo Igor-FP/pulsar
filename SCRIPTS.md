@@ -827,7 +827,7 @@ makedark C:\Darks bias0001.fit             :: создаст bias.fit из по�
 **Метаскрипт**: Использует sub.py, ngain.py, med.py, cosme.py, makedark.py.
 
 **Алгоритм**:
-1. Сканирует входные файлы, отбирает с `IMAGETYP='Flat Frame'`
+1. Сканирует входные файлы, отбирает с `IMAGETYP='Flat Frame'` (или все подошедшие, если задан `--ignore-type`)
 2. Группирует по фильтру (`FILTER`)
 3. Валидирует: все файлы в группе должны иметь одинаковую экспозицию
 4. Ищет `dark<exp>.fit` и `cosme<exp>.lst` (сначала в текущей, потом во входной директории)
@@ -840,13 +840,14 @@ makedark C:\Darks bias0001.fit             :: создаст bias.fit из по�
 
 **Синтаксис**:
 ```
-makeflat.py input_spec [target_median] [--filter NAME]
+makeflat.py input_spec [target_median] [--filter NAME] [--ignore-type]
 ```
 
 **Параметры**:
 - `input_spec` — директория ИЛИ маска ИЛИ последовательность флэтов
 - `target_median` — опционально: целевая медиана для нормализации (по умолчанию 5000)
 - `--filter NAME` — форсировать ВСЕ флэты как фильтр NAME, игнорируя хедер FILTER, и записать `FILTER=NAME` в хедер мастера. Для случая, когда снимали внешним фильтром, а колесо/хедер писали другой (напр. `--filter Ha` → `flat_h.fit`).
+- `--ignore-type` — считать флэтом ЛЮБОЙ подошедший под маску/каталог файл, игнорируя хедер `IMAGETYP` (напр. скайфлэты, которым программа съёмки не проставила `IMAGETYP`). По умолчанию — строго: берутся только файлы с `IMAGETYP='Flat Frame'`.
 
 **Выходные файлы** (в текущую директорию):
 - `flat_<filter>.fit` — master flat для каждого фильтра
@@ -870,6 +871,7 @@ makeflat C:\Flats 10000                    :: с другим target_median
 makeflat flat*.fit                         :: маска файлов
 makeflat @list.txt 8000                    :: из списка
 makeflat C:\Flats --filter Ha              :: внешняя Ha (в хедерах L) -> flat_h.fit, FILTER=Ha
+makeflat skyflat_l*.fit --ignore-type      :: скайфлэты без IMAGETYP -> всё как флэты
 ```
 
 ---

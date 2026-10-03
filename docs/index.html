@@ -703,7 +703,7 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
 
                     <h4>Алгоритм</h4>
                     <ol>
-                        <li>Сканирует файлы, отбирает с IMAGETYP='Flat Frame'</li>
+                        <li>Сканирует файлы, отбирает с IMAGETYP='Flat Frame' (или все подошедшие при --ignore-type)</li>
                         <li>Группирует по фильтру (FILTER)</li>
                         <li>Ищет dark&lt;exp&gt;.fit и cosme&lt;exp&gt;.lst (или запускает makedark)</li>
                         <li>Для каждой группы: dark subtraction → ngain → медиана → cosme</li>
@@ -711,10 +711,11 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>makeflat.py input_spec [target_median] [--filter NAME]</code>
+                        <code>makeflat.py input_spec [target_median] [--filter NAME] [--ignore-type]</code>
                     </div>
 
                     <p><code>--filter NAME</code> — форсировать все флэты как NAME (игнор хедера FILTER) и записать <code>FILTER=NAME</code> в мастер. Для внешнего фильтра при «чужом» хедере (напр. Ha при хедере L → <code>flat_h.fit</code>).</p>
+                    <p><code>--ignore-type</code> — считать флэтом любой подошедший под маску файл, игнорируя <code>IMAGETYP</code> (напр. скайфлэты без проставленного <code>IMAGETYP</code>). По умолчанию — строго, только <code>IMAGETYP='Flat Frame'</code>.</p>
 
                     <h4>Выходные файлы</h4>
                     <p><code>flat_&lt;filter&gt;.fit</code> — master flat для каждого фильтра</p>
@@ -730,7 +731,8 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
                     <pre><code>makeflat C:\Flats                    :: все флэты, median=5000
 makeflat C:\Flats 10000              :: с другим target_median
 makeflat flat*.fit                   :: маска файлов
-makeflat C:\Flats --filter Ha        :: внешняя Ha (хедеры L) -> flat_h.fit, FILTER=Ha</code></pre>
+makeflat C:\Flats --filter Ha        :: внешняя Ha (хедеры L) -> flat_h.fit, FILTER=Ha
+makeflat skyflat_l*.fit --ignore-type :: скайфлэты без IMAGETYP -> всё как флэты</code></pre>
                 </div>
             </section>
 

@@ -816,7 +816,7 @@ makedark /path/to/darks bias0001.fit      # will create bias.fit from sequence
 **Meta-script**: Uses sub.py, ngain.py, med.py, cosme.py, makedark.py.
 
 **Algorithm**:
-1. Scans input files, selects those with `IMAGETYP='Flat Frame'`
+1. Scans input files, selects those with `IMAGETYP='Flat Frame'` (or all matched files if `--ignore-type` is given)
 2. Groups by filter (`FILTER`)
 3. Validates: all files in group must have same exposure
 4. Searches for `dark<exp>.fit` and `cosme<exp>.lst` (first in current, then in input directory)
@@ -829,13 +829,14 @@ makedark /path/to/darks bias0001.fit      # will create bias.fit from sequence
 
 **Syntax**:
 ```
-makeflat.py input_spec [target_median] [--filter NAME]
+makeflat.py input_spec [target_median] [--filter NAME] [--ignore-type]
 ```
 
 **Parameters**:
 - `input_spec` — directory OR mask OR flat sequence
 - `target_median` — optional: target median for normalization (default 5000)
 - `--filter NAME` — force ALL flats to filter NAME, ignoring the FILTER header, and stamp `FILTER=NAME` into the master. For when an external filter was shot but the wheel/header reported another (e.g. `--filter Ha` → `flat_h.fit`).
+- `--ignore-type` — treat EVERY matched file as a flat, ignoring the `IMAGETYP` header (e.g. sky flats whose acquisition software left `IMAGETYP` unset). Default: strict, only `IMAGETYP='Flat Frame'` files are used.
 
 **Output files** (to current directory):
 - `flat_<filter>.fit` — master flat for each filter
@@ -859,6 +860,7 @@ makeflat /path/to/flats 10000             # with different target_median
 makeflat flat*.fit                        # file mask
 makeflat @list.txt 8000                   # from list
 makeflat /path/to/flats --filter Ha       # external Ha (headers say L) -> flat_h.fit, FILTER=Ha
+makeflat skyflat_l*.fit --ignore-type     # sky flats with no IMAGETYP -> all treated as flats
 ```
 
 ---
