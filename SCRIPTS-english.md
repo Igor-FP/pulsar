@@ -8,7 +8,7 @@ A toolkit for batch processing of astronomical FITS images.
 
 | Script | Purpose |
 |--------|---------|
-| **add.py** | Addition: `result = input + operand + offset` |
+| **add.py** | Addition `result = input + operand + offset`; `--screen` = screen composite |
 | **sub.py** | Subtraction: `result = input - operand + offset` |
 | **mul.py** | Multiplication: `result = input * operand * scale` |
 | **div.py** | Division: `result = (input / operand) * scale` |
@@ -43,7 +43,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **lrgb.py** | LRGB composition (combine luminance with RGB color) |
 | **mtf.py** | Nonlinear brightness stretch (auto levels, color preservation) |
 | **makemask.py** | Mask making: greyscale, black/white clip (percentile or absolute) + stretch, morphological grow/shrink, invert |
-| **blend.py** | Combine two images through an opacity mask: out = source*(1-m) + operand*m; --mtf, --invert |
+| **blend.py** | Combine two images through an opacity mask (or a flat opacity `-o N`): out = source*(1-m) + operand*m; `-o`/`--opacity` scales the final opacity, --mtf, --invert |
 | **stack.py** | Optimal weighted stacking with sigma-fade clipping |
 | **rgbbalance.py** | RGB color balance and brightness normalization |
 | **bestof.py** | Select best frames by FWHM (seeing quality) |
@@ -51,6 +51,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **staralign.py** | Star-based image registration (Automatic, Thin Plate Spline) |
 | **cometalign.py** | Comet-nucleus alignment of a star-aligned sequence (interactive mark of first/last frame + time-linear shift) |
 | **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
+| **animate.py** | Animate a frame sequence: video (H.264/FFV1), 16-bit SER, or a PNG series; per-frame stretch, crop, burned time+filename label |
 
 ---
 
@@ -117,20 +118,22 @@ Arithmetic scripts (add, sub, mul, div, arith) support numeric constants as oper
 
 ### add.py
 
-**Purpose**: Add a value or image to input frames.
+**Purpose**: Add a value or image to input frames. The `--screen` mode does a screen composite instead of addition (the inverse of unscreen).
 
-**Formula**: `result = input + operand + offset`
+**Formula**: `result = input + operand + offset` (add) or `result = 1 - (1 - input) * (1 - operand)` (`--screen`)
 
 **Syntax**:
 ```
 add.py input_spec output_spec operand [offset]
+add.py input_spec output_spec operand --screen
 ```
 
 **Parameters**:
 - `input_spec` — input files
 - `output_spec` — output files
 - `operand` — numeric constant OR FITS file OR numbered FITS pattern
-- `offset` — optional numeric offset (default 0)
+- `offset` — optional numeric offset (default 0; add mode only)
+- `--screen` — screen composite instead of addition: `1 - (1 - input) * (1 - operand)`, elementwise, 2D and 3D (RGB). Float data is treated as [0,1] (white = 1.0); integer data uses its dtype range. Takes no offset. Used to recombine a stars layer onto a starless layer (inverse of unscreen).
 
 **Examples**:
 ```bash
@@ -138,6 +141,7 @@ add light0001.fit cal0001.fit 100
 add *.fit out0001.fit bias.fit
 add light0001.fit result0001.fit dark0001.fit 500
 add image.fit result.fit 1024           # add constant to all pixels
+add starless.fit combined.fit stars.fit --screen   # recombine stars (screen)
 ```
 
 ---
@@ -813,7 +817,7 @@ makedark /path/to/darks bias0001.fit      # will create bias.fit from sequence
 **Meta-script**: Uses sub.py, ngain.py, med.py, cosme.py, makedark.py.
 
 **Algorithm**:
-1. Scans input files, selects those with `IMAGETYP='Flat Frame'`
+1. Scans input files, selects those with `IMAGETYP='Flat Frame'` (or all matched files if `--ignore-type` is given)
 2. Groups by filter (`FILTER`)
 3. Validates: all files in group must have same exposure
 4. Searches for `dark<exp>.fit` and `cosme<exp>.lst` (first in current, then in input directory)
@@ -826,13 +830,14 @@ makedark /path/to/darks bias0001.fit      # will create bias.fit from sequence
 
 **Syntax**:
 ```
-makeflat.py input_spec [target_median] [--filter NAME]
+makeflat.py input_spec [target_median] [--filter NAME] [--ignore-type]
 ```
 
 **Parameters**:
 - `input_spec` — directory OR mask OR flat sequence
 - `target_median` — optional: target median for normalization (default 5000)
 - `--filter NAME` — force ALL flats to filter NAME, ignoring the FILTER header, and stamp `FILTER=NAME` into the master. For when an external filter was shot but the wheel/header reported another (e.g. `--filter Ha` → `flat_h.fit`).
+- `--ignore-type` — treat EVERY matched file as a flat, ignoring the `IMAGETYP` header (e.g. sky flats whose acquisition software left `IMAGETYP` unset). Default: strict, only `IMAGETYP='Flat Frame'` files are used.
 
 **Output files** (to current directory):
 - `flat_<filter>.fit` — master flat for each filter
@@ -856,6 +861,7 @@ makeflat /path/to/flats 10000             # with different target_median
 makeflat flat*.fit                        # file mask
 makeflat @list.txt 8000                   # from list
 makeflat /path/to/flats --filter Ha       # external Ha (headers say L) -> flat_h.fit, FILTER=Ha
+makeflat skyflat_l*.fit --ignore-type     # sky flats with no IMAGETYP -> all treated as flats
 ```
 
 ---
@@ -1774,24 +1780,40 @@ Mask normalization: scaled to [0, 1] by its OWN full scale - the dtype maximum f
 
 **Syntax**:
 ```
-blend.py source output mask operand [--mtf [K]] [--invert]
+blend.py source output mask operand [--mtf [K]] [--invert] [-o N]
+blend.py source output operand -o N [--mtf [K]] [--invert]      (no mask)
 ```
+
+The final opacity `m` is built in THIS ORDER:
+1. base - the mask (normalized to [0,1]) or, if no mask is given, a flat `1.0`;
+2. `--mtf` - reshape the base opacity's midtones;
+3. `--invert` - `m -> 1 - m`;
+4. `-o N` - multiply the whole result by `N`, applied LAST.
+
+So `-o` only scales the FINAL opacity down ("do everything as usual, but at N strength"): with a mask -> a weaker mask (`m*N`), without a mask -> a flat `N`.
 
 **Parameters**:
 - `source` - base image(s): single file, wildcard (*.fit), numbered, or @list.txt
 - `output` - single file, numbered pattern, or directory
-- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant.
-- `operand` - image blended in where the mask is bright: a FITS file, a matching sequence, or a numeric constant (flat level)
-- `--mtf [K]` - apply the MTF (midtone transfer function) to the mask in [0,1] BEFORE blending and BEFORE `--invert`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 brightens the mask (more operand), K>0.5 darkens it (more source). K defaults to 0.25 when omitted.
-- `--invert` - use the inverted mask (m -> 1 - m); applied AFTER `--mtf`
+- `mask` - greyscale opacity image (FITS file, or a sequence matching the source count). NOT a numeric constant. May be omitted ONLY together with `-o/--opacity` (then a flat opacity is used).
+- `operand` - image blended in where opacity is high: a FITS file, a matching sequence, or a numeric constant (flat level)
+- `-o N`, `--opacity N` - multiply the final opacity by `N`, applied LAST (after `--mtf` and `--invert`). `N` is a fraction in [0,1] or a percent with a `%` suffix (e.g. `0.3` or `30%`); `N` defaults to `0.5` when the flag is given without a value. With a mask it weakens it to N strength; with the mask argument omitted it gives a flat opacity `N`.
+- `--mtf [K]` - apply the MTF to the BASE opacity in [0,1], BEFORE `--invert` and BEFORE `-o`. K is the midtones balance (0<K<1), same as mtf.py: K<0.5 raises opacity (more operand), K>0.5 lowers it. K defaults to 0.25 when omitted. On a flat `1.0` base (no mask) MTF has no effect - it has no midtones.
+- `--invert` - use the inverted opacity (`m -> 1 - m`); AFTER `--mtf`, BEFORE `-o`. With no mask, inverting the flat `1.0` gives `0` (nothing is blended in).
 
 **Examples**:
 ```bash
 # Blend stars.fit over base.fit where mask.fit is bright
 blend base.fit out.fit mask.fit stars.fit
 
-# Fade the masked regions toward 0 (operand = constant 0)
-blend base.fit out.fit mask.fit 0
+# Apply the same mask at half strength (mask * 0.5)
+blend base.fit out.fit mask.fit stars.fit -o 50%
+
+# Flat 30% overlay of stars.fit (no mask)
+blend base.fit out.fit stars.fit -o 30%
+
+# An even 50/50 average of the two images
+blend base.fit out.fit hi.fit -o 0.5
 
 # Brighten the mask midtones before blending (more of hi.fit)
 blend base.fit out.fit mask.fit hi.fit --mtf 0.2
@@ -1800,7 +1822,7 @@ blend base.fit out.fit mask.fit hi.fit --mtf 0.2
 blend base.fit out.fit mask.fit hi.fit --invert
 ```
 
-`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
+`source` and `operand` must share shape and data scale; the output keeps the `source` dtype and header. 2D and 3-channel colour images are supported (a mono mask or the flat opacity is broadcast across channels). If the operand is a numeric constant, give `--mtf` an explicit K (e.g. `--mtf 0.3`) so the constant is not read as K.
 
 **Dependencies**: numpy/astropy only (batch_utils).
 
@@ -2074,6 +2096,61 @@ xisf2fits input_spec output_spec
 xisf2fits image.xisf image.fit
 xisf2fits *.xisf converted/
 xisf2fits @list.txt out0001.fit
+```
+
+---
+
+### animate.py
+
+**Purpose**: Build an animation from a FITS frame sequence - a video, a 16-bit SER file, or a PNG series. Two typical jobs: publishing animations of objects/comets, and blinking / transient review (solar-system and deep-sky).
+
+**Pipeline** (identical per frame): collect the sequence -> sort by acquisition time (`DATE-OBS`) -> optional crop -> black/white points from the **non-zero** pixels (zeros = alignment borders are ignored) -> MTF putting the median at a target -> quantize -> burned label (timestamp + source filename) -> assemble into the chosen format.
+
+**Output format - by output extension / flag**:
+- Video (default, `.mp4`/`.mkv`) via PyAV: `--quality lossless` (FFV1, default) / `youtube` (H.264 crf16) / `uncompressed`.
+- `.ser` - uncompressed **16-bit SER** (mono/RGB) with a per-frame UTC timestamp trailer, for SER Player / PIPP / AutoStakkert (no PyAV needed).
+- `--png` - a numbered PNG series (8-bit; mono -> grayscale, colour -> RGBA).
+
+**Dependencies**: numpy, astropy (always); PyAV for video (offered as `pip install av` on first run); Pillow for `--png`; SER has no external dependency (`lib/ser_writer.py`).
+
+**Syntax**:
+```
+animate.py input_spec output [options]
+```
+
+**Parameters**:
+- `input_spec` - directory, wildcard (`*.fit`), numbered (`img0001.fit`) or `@list.txt`
+- `output` - output path: `.mp4`/`.mkv` (video), `.ser` (SER), or a base name for `--png` (no extension -> a default container is chosen by `--quality`)
+- `--median T` - target median for the MTF (default 0.2)
+- `--black P` - black point as a percentile (default 0.1), **or**
+- `--autoblack [N]` - black point = `median - N*MAD` of the non-zero pixels (N=5), signed and robust; mutually exclusive with `--black`
+- `--white P` - white-point percentile (default 99.9)
+- `--fps N` - frames per second (30; 2-4 for blinking)
+- `--quality lossless|youtube|uncompressed` - video codec
+- `--loop N`, `--boomerang` - repeat / ping-pong (seamless loop)
+- `--label [utc|local]` - timezone for the label (default utc). The label (timestamp + source filename) is burned into **every** output by default
+- `--nostamp` - do not burn any label (no timestamp, no filename)
+- `--png` - PNG series instead of a video
+- Crop: `--center W H` (central WxH crop; with `--width/--height`, `--center X Y` is the centre point), `--width W --height H [--center X Y]`, margins `--top/--bottom/--left/--right`
+- `--sort date|name` - ordering (default DATE-OBS; missing header -> warn and fall back to filename order)
+- `--threads N` - frame-processing threads (default cores-1)
+- `--probe FILE` - diagnostic: inspect a produced video (frame count, timestamps, brightness)
+
+Zero (alignment-border) pixels are always ignored in the stretch statistics. RGB: background is neutralized, one shared MTF from luminance (hue preserved). Source files are only read. Any number of frames (streaming write, disk-limited).
+
+**Examples**:
+```batch
+:: YouTube clip (H.264), 15 fps
+animate out_exp120_L*.fit anim\m20.mp4 --quality youtube --fps 15
+
+:: transient blink: slow, ping-pong
+animate frames\ anim\blink.mkv --fps 3 --boomerang
+
+:: uncompressed 16-bit SER for SER Player, central 2000x2000 crop
+animate out*.fit anim\m20.ser --center 2000 2000
+
+:: PNG series with burned timestamp + filename
+animate out*.fit anim\m20 --png
 ```
 
 ---

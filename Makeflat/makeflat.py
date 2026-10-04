@@ -65,6 +65,10 @@ def usage():
         "                     header, and stamp FILTER=NAME into the master. Use\n"
         "                     when an external filter was shot but the wheel/header\n"
         "                     reported another (e.g. --filter Ha -> flat_h.fit).\n"
+        "    --ignore-type  - treat EVERY matched file as a flat, ignoring the\n"
+        "                     IMAGETYP header (e.g. sky flats whose acquisition\n"
+        "                     software left IMAGETYP unset). Default: strict, only\n"
+        "                     IMAGETYP='Flat Frame' files are used.\n"
         "\n"
         "Output (to current directory):\n"
         "    flat_<filter>.fit - master flat for each filter\n"
@@ -81,6 +85,7 @@ def parse_args(argv):
     # ignoring the FILTER header); the rest are positional as before.
     args = argv[1:]
     filter_override = None
+    ignore_type = False
     positionals = []
     i = 0
     while i < len(args):
@@ -96,6 +101,15 @@ def parse_args(argv):
             filter_override = a.split("=", 1)[1].strip()
             i += 1
             continue
+        if a == "--ignore-type":
+            ignore_type = True
+            i += 1
+            continue
+        if a.startswith("-"):
+            # Unknown option: fail loudly instead of swallowing it as a positional
+            # (which would misfire later as "target_median must be a number").
+            sys.stderr.write(f"Error: unknown option: {a}\n")
+            usage()
         positionals.append(a)
         i += 1
 
@@ -115,7 +129,7 @@ def parse_args(argv):
             sys.stderr.write("Error: target_median must be a number.\n")
             sys.exit(1)
 
-    return input_spec, target_median, filter_override
+    return input_spec, target_median, filter_override, ignore_type
 
 
 def expand_input_to_files(spec):
@@ -477,7 +491,7 @@ def process_filter_group(filter_name, files, exp_seconds, dark_path, cosme_path,
 
 
 def main():
-    input_spec, target_median, filter_override = parse_args(sys.argv)
+    input_spec, target_median, filter_override, ignore_type = parse_args(sys.argv)
 
     try:
         all_files, input_dir = expand_input_to_files(input_spec)
@@ -488,12 +502,16 @@ def main():
     sys.stderr.write(f"Found {len(all_files)} FITS files in input.\n")
     sys.stderr.write(f"Input directory: {input_dir}\n")
 
-    flat_files = filter_flat_frames(all_files)
-    if not flat_files:
-        sys.stderr.write("Error: no files with IMAGETYP='Flat Frame' found.\n")
-        sys.exit(1)
-
-    sys.stderr.write(f"Found {len(flat_files)} flat frames.\n")
+    if ignore_type:
+        flat_files = all_files
+        sys.stderr.write(f"Ignoring IMAGETYP: treating all {len(flat_files)} matched file(s) as flats.\n")
+    else:
+        flat_files = filter_flat_frames(all_files)
+        if not flat_files:
+            sys.stderr.write("Error: no files with IMAGETYP='Flat Frame' found.\n")
+            sys.stderr.write("       (use --ignore-type to treat all matched files as flats)\n")
+            sys.exit(1)
+        sys.stderr.write(f"Found {len(flat_files)} flat frames.\n")
 
     if filter_override is not None:
         sys.stderr.write(f"Filter override: forcing all flats to '{filter_override}' (ignoring FILTER header).\n")

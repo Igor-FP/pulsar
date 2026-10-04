@@ -159,6 +159,12 @@ def process_file(infile, outfile, flip_x, flip_y):
         if key in header:
             del header[key]
 
+    # A vertical (Y) flip reverses the row order, which invalidates a stored
+    # ROWORDER keyword (e.g. RC-Astro writes ROWORDER='TOP-DOWN'). Drop it so the
+    # header cannot mis-report the new pixel order to a later tool.
+    if flip_y and "ROWORDER" in header:
+        del header["ROWORDER"]
+
     axes = []
     if flip_x:
         axes.append("X")

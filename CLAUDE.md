@@ -65,7 +65,7 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 
 | Tool | Purpose |
 |------|---------|
-| add.py, arith.py | Image arithmetic (add/sub/mul/div) |
+| add.py, arith.py | Image arithmetic (add/sub/mul/div); add.py `--screen` = screen composite `1-(1-a)(1-b)` (2D/RGB, inverse of unscreen) |
 | sum.py | Stack summation with exposure time handling |
 | med.py | Tiled parallel median combine |
 | calibrate.py | Dark/bias/flat/cosmetic calibration pipeline |
@@ -92,17 +92,18 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | lrgb.py | LRGB luminance layering (HSL and ratio methods; optional SNR² super-luminance blend, R+G+B combine, background desaturation) |
 | mtf.py | Midtone Transfer Function (PixInsight-compatible) |
 | makemask.py | Build processing masks: colour->grey (R+2G+B)/4, black/white clip + stretch (each endpoint percentile `90%` or absolute `0.01` = fraction of full scale; mixable), morphological grow/shrink (min/max aperture), invert; mono output |
-| blend.py | Combine two images through an opacity mask: out = source*(1-m) + operand*m (white mask -> operand, black -> source, grey -> mean); mask normalized by its own full scale, mono mask broadcast over RGB; --mtf [K] reshapes the mask (mtf.py K, default 0.25), --invert; operand may be a numeric constant |
+| blend.py | Combine two images through an opacity mask: out = source*(1-m) + operand*m (white mask -> operand, black -> source, grey -> mean); mask normalized by its own full scale, mono mask broadcast over RGB; --mtf [K] reshapes the mask (mtf.py K, default 0.25), --invert; -o/--opacity N scales the FINAL opacity last (mask*N, or a flat N with the mask omitted); operand may be a numeric constant |
 | rgbbalance.py | RGB color balance and brightness normalization |
 | stack.py | Optimal weighted stacking with sigma-fade clipping |
 | staralign.py | Star-based image registration (pentagon descriptors, TPS) |
 | cometalign.py | Comet-nucleus alignment of a star-aligned sequence (interactive mark of comet on first/last frame, then time-linear per-frame shift; pygame GUI, or --start/--stop headless) |
+| animate.py | Build an animation from a FITS sequence sorted by DATE-OBS: video (H.264/FFV1 via PyAV), 16-bit SER (lib/ser_writer.py), or a numbered PNG series; per-frame stretch (percentile or `--autoblack` median−N·MAD, zero/alignment-border pixels ignored), crop (center/size/margins), burned time+source-filename label |
 
 ## Dependencies
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance), diplib (backflat.py --median-mode fast), pygame (cometalign.py and backflat.py interactive GUI)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O, animate.py --png), sep (staralign, bestof, rgbbalance), diplib (backflat.py --median-mode fast), pygame (cometalign.py and backflat.py interactive GUI), PyAV (animate.py video output; animate's SER output is dependency-free via lib/ser_writer.py)
 
 ## Running Tools
 

@@ -97,6 +97,7 @@
                     <li><a href="#lrgb">lrgb.py</a></li>
                     <li><a href="#rgbbalance">rgbbalance.py</a></li>
                     <li><a href="#rgb">rgb.py</a></li>
+                    <li><a href="#animate">animate.py</a></li>
                 </ul>
             </div>
 
@@ -129,7 +130,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td>add.py</td><td>Сложение: result = input + operand + offset</td></tr>
+                        <tr><td>add.py</td><td>Сложение: result = input + operand + offset; режим --screen — сборка методом screen</td></tr>
                         <tr><td>sub.py</td><td>Вычитание: result = input - operand + offset</td></tr>
                         <tr><td>mul.py</td><td>Умножение: result = input * operand * scale</td></tr>
                         <tr><td>div.py</td><td>Деление: result = (input / operand) * scale</td></tr>
@@ -156,7 +157,7 @@
                         <tr><td>lrgb.py</td><td>LRGB композиция (HSL и ratio методы)</td></tr>
                         <tr><td>mtf.py</td><td>Midtone Transfer Function с auto black/white</td></tr>
                         <tr><td>makemask.py</td><td>Создание масок (обрезка перцентиль/абсолют + стретч, наращивание, инверсия)</td></tr>
-                        <tr><td>blend.py</td><td>Совмещение по маске непрозрачности (out = source*(1-m) + operand*m; --mtf, --invert)</td></tr>
+                        <tr><td>blend.py</td><td>Совмещение по маске непрозрачности или ровной непрозрачности -o N (out = source*(1-m) + operand*m; --mtf, --invert)</td></tr>
                         <tr><td>rgbbalance.py</td><td>Баланс цвета и яркости RGB</td></tr>
                         <tr><td>rgb.py</td><td>Сборка/разделение RGB каналов</td></tr>
                         <tr><td>hotfix.py</td><td>Удаление горячих и холодных пикселей</td></tr>
@@ -171,6 +172,7 @@
                         <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия (JPEG/PNG сохраняют FITS-заголовок в метаданных)</td></tr>
                         <tr><td>tiff2fits.py</td><td>TIFF → FITS с восстановлением заголовка</td></tr>
                         <tr><td>absession.py</td><td>CSV генератор для AstroBin</td></tr>
+                        <tr><td>animate.py</td><td>Анимация последовательности кадров: видео (H.264/FFV1), 16-бит SER или серия PNG; стретч, кроп, подпись время+имя файла</td></tr>
                     </tbody>
                 </table>
             </section>
@@ -233,13 +235,13 @@
 
                 <div class="script-card">
                     <h3>add.py <span class="badge">арифметика</span></h3>
-                    <p>Сложение значения или изображения с входными кадрами.</p>
+                    <p>Сложение значения или изображения с входными кадрами. Режим <code>--screen</code> вместо сложения выполняет сборку методом screen (обратную к unscreen).</p>
 
-                    <div class="formula">result = input + operand + offset</div>
+                    <div class="formula">result = input + operand + offset&nbsp;&nbsp;|&nbsp;&nbsp;--screen: 1 - (1 - input) * (1 - operand)</div>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>add.py input_spec output_spec operand [offset]</code>
+                        <code>add.py input_spec output_spec operand [offset] [--screen]</code>
                     </div>
 
                     <div class="params">
@@ -247,13 +249,15 @@
                         <div class="param"><span class="param-name">input_spec</span><span class="param-desc">входные файлы</span></div>
                         <div class="param"><span class="param-name">output_spec</span><span class="param-desc">выходные файлы</span></div>
                         <div class="param"><span class="param-name">operand</span><span class="param-desc">константа или FITS-файл</span></div>
-                        <div class="param"><span class="param-name">offset</span><span class="param-desc">смещение (по умолчанию 0)</span></div>
+                        <div class="param"><span class="param-name">offset</span><span class="param-desc">смещение (по умолчанию 0; только сложение)</span></div>
+                        <div class="param"><span class="param-name">--screen</span><span class="param-desc">сборка методом screen: 1-(1-a)(1-b), 2D и 3D; вещественное в [0,1], целое по диапазону типа; без offset</span></div>
                     </div>
 
                     <h4>Примеры</h4>
                     <pre><code>add light0001.fit cal0001.fit 100
 add *.fit out0001.fit bias.fit
-add image.fit result.fit 1024</code></pre>
+add image.fit result.fit 1024
+add starless.fit combined.fit stars.fit --screen</code></pre>
                 </div>
             </section>
 
@@ -701,7 +705,7 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
 
                     <h4>Алгоритм</h4>
                     <ol>
-                        <li>Сканирует файлы, отбирает с IMAGETYP='Flat Frame'</li>
+                        <li>Сканирует файлы, отбирает с IMAGETYP='Flat Frame' (или все подошедшие при --ignore-type)</li>
                         <li>Группирует по фильтру (FILTER)</li>
                         <li>Ищет dark&lt;exp&gt;.fit и cosme&lt;exp&gt;.lst (или запускает makedark)</li>
                         <li>Для каждой группы: dark subtraction → ngain → медиана → cosme</li>
@@ -709,10 +713,11 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>makeflat.py input_spec [target_median] [--filter NAME]</code>
+                        <code>makeflat.py input_spec [target_median] [--filter NAME] [--ignore-type]</code>
                     </div>
 
                     <p><code>--filter NAME</code> — форсировать все флэты как NAME (игнор хедера FILTER) и записать <code>FILTER=NAME</code> в мастер. Для внешнего фильтра при «чужом» хедере (напр. Ha при хедере L → <code>flat_h.fit</code>).</p>
+                    <p><code>--ignore-type</code> — считать флэтом любой подошедший под маску файл, игнорируя <code>IMAGETYP</code> (напр. скайфлэты без проставленного <code>IMAGETYP</code>). По умолчанию — строго, только <code>IMAGETYP='Flat Frame'</code>.</p>
 
                     <h4>Выходные файлы</h4>
                     <p><code>flat_&lt;filter&gt;.fit</code> — master flat для каждого фильтра</p>
@@ -728,7 +733,8 @@ makedark C:\Darks master_bias.fit    :: с готовым master bias</code></pr
                     <pre><code>makeflat C:\Flats                    :: все флэты, median=5000
 makeflat C:\Flats 10000              :: с другим target_median
 makeflat flat*.fit                   :: маска файлов
-makeflat C:\Flats --filter Ha        :: внешняя Ha (хедеры L) -> flat_h.fit, FILTER=Ha</code></pre>
+makeflat C:\Flats --filter Ha        :: внешняя Ha (хедеры L) -> flat_h.fit, FILTER=Ha
+makeflat skyflat_l*.fit --ignore-type :: скайфлэты без IMAGETYP -> всё как флэты</code></pre>
                 </div>
             </section>
 
@@ -1130,29 +1136,32 @@ makemask rgb.fit mask.fit --black 50% --white 99%</code></pre>
             <section id="blend">
                 <div class="script-card">
                     <h3>blend.py <span class="badge">обработка</span></h3>
-                    <p>Совмещение двух изображений по маске непрозрачности: <code>output = source*(1-m) + operand*m</code>. Белый пиксель маски -&gt; операнд, чёрный -&gt; исходник, серый -&gt; среднее. Маска нормируется в [0,1] по своему полному диапазону (max типа для целых, 1.0 для float); цветная маска -&gt; серое <code>(R+2G+B)/4</code>.</p>
+                    <p>Совмещение двух изображений по непрозрачности операнда: <code>output = source*(1-m) + operand*m</code> (m=1 -&gt; операнд, m=0 -&gt; исходник). Непрозрачность <code>m</code> строится по порядку: (1) база - маска (нормированная в [0,1]; цветная -&gt; серое <code>(R+2G+B)/4</code>) или, без маски, ровная 1.0; (2) <code>--mtf</code>; (3) <code>--invert</code>; (4) <code>-o N</code> - умножить всё на N В КОНЦЕ. То есть <code>-o</code> ослабляет финальную непрозрачность: с маской -&gt; ослабленная маска (m*N), без маски -&gt; ровное N.</p>
 
                     <div class="syntax">
                         <h4>Синтаксис</h4>
-                        <code>blend.py source output mask operand [--mtf [K]] [--invert]</code>
+                        <code>blend.py source output mask operand [--mtf [K]] [--invert] [-o N]</code><br>
+                        <code>blend.py source output operand -o N [--mtf [K]] [--invert]  (без маски)</code>
                     </div>
 
                     <div class="params">
                         <h4>Параметры</h4>
                         <div class="param"><span class="param-name">source / output</span><span class="param-desc">базовое изображение(я) и выход; стандартные шаблоны (файл, *.fit, нумерованные, @list.txt)</span></div>
-                        <div class="param"><span class="param-name">mask</span><span class="param-desc">полутоновая маска непрозрачности (FITS-файл или последовательность по числу кадров); НЕ константа</span></div>
+                        <div class="param"><span class="param-name">mask</span><span class="param-desc">полутоновая маска непрозрачности (FITS-файл или последовательность); НЕ константа. Можно опустить только вместе с -o</span></div>
                         <div class="param"><span class="param-name">operand</span><span class="param-desc">подмешиваемое изображение (файл/последовательность) или числовая константа (ровный уровень)</span></div>
-                        <div class="param"><span class="param-name">--mtf [K]</span><span class="param-desc">применить MTF к маске в [0,1] до совмещения и до инверсии; K как в mtf.py (0&lt;K&lt;1), по умолчанию 0.25</span></div>
-                        <div class="param"><span class="param-name">--invert</span><span class="param-desc">инвертировать маску (m -&gt; 1-m); после --mtf</span></div>
+                        <div class="param"><span class="param-name">-o N, --opacity N</span><span class="param-desc">умножить финальную непрозрачность на N (В КОНЦЕ, после --mtf и --invert); N - доля [0,1] или процент с % (0.3 / 30%), по умолчанию 0.5. С маской - ослабляет её; без маски - ровное N</span></div>
+                        <div class="param"><span class="param-name">--mtf [K]</span><span class="param-desc">применить MTF к базовой непрозрачности в [0,1] до --invert и до -o; K как в mtf.py (0&lt;K&lt;1), по умолчанию 0.25 (на ровной базе без маски не влияет)</span></div>
+                        <div class="param"><span class="param-name">--invert</span><span class="param-desc">инвертировать непрозрачность (m -&gt; 1-m); после --mtf, до -o</span></div>
                     </div>
 
-                    <p>source и operand должны совпадать по форме и шкале данных; выход сохраняет тип и заголовок source. Поддержаны 2D и 3-канальные изображения (моно-маска транслируется на каналы). Если операнд - числовая константа, задавайте K для --mtf явно, чтобы он не был принят за K.</p>
+                    <p>source и operand должны совпадать по форме и шкале данных; выход сохраняет тип и заголовок source. Поддержаны 2D и 3-канальные изображения (моно-маска и ровная непрозрачность транслируются на каналы). Если операнд - числовая константа, задавайте K для --mtf явно, чтобы он не был принят за K.</p>
 
                     <h4>Примеры</h4>
-                    <pre><code>blend base.fit out.fit mask.fit stars.fit         # подмешать stars там, где маска светлая
-blend base.fit out.fit mask.fit 0                 # притушить замаскированное к 0
-blend base.fit out.fit mask.fit hi.fit --mtf 0.2  # осветлить полутона маски
-blend base.fit out.fit mask.fit hi.fit --invert   # совмещать по тёмной части маски</code></pre>
+                    <pre><code>blend base.fit out.fit mask.fit stars.fit          # подмешать stars там, где маска светлая
+blend base.fit out.fit mask.fit stars.fit -o 50%   # та же маска на половину силы (m*0.5)
+blend base.fit out.fit stars.fit -o 30%            # ровное наложение 30% (без маски)
+blend base.fit out.fit hi.fit -o 0.5               # ровное среднее 50/50
+blend base.fit out.fit mask.fit hi.fit --mtf 0.2   # осветлить полутона маски</code></pre>
                 </div>
             </section>
 
@@ -1298,6 +1307,26 @@ rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5</code></pre>
                     <pre><code>rgb --merge r.fit g.fit b.fit --out rgb.fit
 rgb --merge r0001.fit g0001.fit b0001.fit --out rgb0001.fit
 rgb --split rgb.fit --out r.fit g.fit b.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="animate">
+                <div class="script-card">
+                    <h3>animate.py <span class="badge">анимация</span></h3>
+                    <p>Сборка анимации из последовательности FITS-кадров: видео (H.264/FFV1), 16-битный SER или серия PNG. Для публикации анимаций астрообъектов/комет и блинк-просмотра транзиентов. Кадры сортируются по DATE-OBS, одинаково растягиваются (чёрная/белая точки по ненулевым пикселям, MTF по медиане) и собираются; в угол впечатывается время + имя исходного файла (убирается флагом <code>--nostamp</code>).</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>animate input_spec output [--quality lossless|youtube|uncompressed] [--fps N] [--median T] [--black P | --autoblack [N]] [--white P] [--loop N] [--boomerang] [--label [utc|local]] [--nostamp] [--png] [--center W H | --width W --height H [--center X Y] | --top/--bottom/--left/--right N] [--sort date|name]</code>
+                    </div>
+
+                    <p>Формат вывода — по расширению: <code>.mp4</code>/<code>.mkv</code> — видео (через PyAV); <code>.ser</code> — несжатый 16-битный SER (mono/RGB, трейлер UTC-времени; для SER Player / PIPP / AutoStakkert); флаг <code>--png</code> — нумерованная серия PNG. Нулевые пиксели (поля выравнивания) игнорируются в статистике. Исходники только читаются; число кадров не ограничено.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>animate out*.fit anim\m20.mp4 --quality youtube --fps 15
+animate frames\ anim\blink.mkv --fps 3 --boomerang
+animate out*.fit anim\m20.ser --center 2000 2000
+animate out*.fit anim\m20 --png</code></pre>
                 </div>
             </section>
 
