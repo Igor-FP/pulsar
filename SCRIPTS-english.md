@@ -51,6 +51,7 @@ A toolkit for batch processing of astronomical FITS images.
 | **staralign.py** | Star-based image registration (Automatic, Thin Plate Spline) |
 | **cometalign.py** | Comet-nucleus alignment of a star-aligned sequence (interactive mark of first/last frame + time-linear shift) |
 | **xisf2fits.py** | Convert XISF (PixInsight) files to FITS |
+| **animate.py** | Animate a frame sequence: video (H.264/FFV1), 16-bit SER, or a PNG series; per-frame stretch, crop, burned time+filename label |
 
 ---
 
@@ -2095,6 +2096,61 @@ xisf2fits input_spec output_spec
 xisf2fits image.xisf image.fit
 xisf2fits *.xisf converted/
 xisf2fits @list.txt out0001.fit
+```
+
+---
+
+### animate.py
+
+**Purpose**: Build an animation from a FITS frame sequence - a video, a 16-bit SER file, or a PNG series. Two typical jobs: publishing animations of objects/comets, and blinking / transient review (solar-system and deep-sky).
+
+**Pipeline** (identical per frame): collect the sequence -> sort by acquisition time (`DATE-OBS`) -> optional crop -> black/white points from the **non-zero** pixels (zeros = alignment borders are ignored) -> MTF putting the median at a target -> quantize -> burned label (timestamp + source filename) -> assemble into the chosen format.
+
+**Output format - by output extension / flag**:
+- Video (default, `.mp4`/`.mkv`) via PyAV: `--quality lossless` (FFV1, default) / `youtube` (H.264 crf16) / `uncompressed`.
+- `.ser` - uncompressed **16-bit SER** (mono/RGB) with a per-frame UTC timestamp trailer, for SER Player / PIPP / AutoStakkert (no PyAV needed).
+- `--png` - a numbered PNG series (8-bit; mono -> grayscale, colour -> RGBA).
+
+**Dependencies**: numpy, astropy (always); PyAV for video (offered as `pip install av` on first run); Pillow for `--png`; SER has no external dependency (`lib/ser_writer.py`).
+
+**Syntax**:
+```
+animate.py input_spec output [options]
+```
+
+**Parameters**:
+- `input_spec` - directory, wildcard (`*.fit`), numbered (`img0001.fit`) or `@list.txt`
+- `output` - output path: `.mp4`/`.mkv` (video), `.ser` (SER), or a base name for `--png` (no extension -> a default container is chosen by `--quality`)
+- `--median T` - target median for the MTF (default 0.2)
+- `--black P` - black point as a percentile (default 0.1), **or**
+- `--autoblack [N]` - black point = `median - N*MAD` of the non-zero pixels (N=5), signed and robust; mutually exclusive with `--black`
+- `--white P` - white-point percentile (default 99.9)
+- `--fps N` - frames per second (30; 2-4 for blinking)
+- `--quality lossless|youtube|uncompressed` - video codec
+- `--loop N`, `--boomerang` - repeat / ping-pong (seamless loop)
+- `--label [utc|local]` - timezone for the label (default utc). The label (timestamp + source filename) is burned into **every** output by default
+- `--nostamp` - do not burn any label (no timestamp, no filename)
+- `--png` - PNG series instead of a video
+- Crop: `--center W H` (central WxH crop; with `--width/--height`, `--center X Y` is the centre point), `--width W --height H [--center X Y]`, margins `--top/--bottom/--left/--right`
+- `--sort date|name` - ordering (default DATE-OBS; missing header -> warn and fall back to filename order)
+- `--threads N` - frame-processing threads (default cores-1)
+- `--probe FILE` - diagnostic: inspect a produced video (frame count, timestamps, brightness)
+
+Zero (alignment-border) pixels are always ignored in the stretch statistics. RGB: background is neutralized, one shared MTF from luminance (hue preserved). Source files are only read. Any number of frames (streaming write, disk-limited).
+
+**Examples**:
+```batch
+:: YouTube clip (H.264), 15 fps
+animate out_exp120_L*.fit anim\m20.mp4 --quality youtube --fps 15
+
+:: transient blink: slow, ping-pong
+animate frames\ anim\blink.mkv --fps 3 --boomerang
+
+:: uncompressed 16-bit SER for SER Player, central 2000x2000 crop
+animate out*.fit anim\m20.ser --center 2000 2000
+
+:: PNG series with burned timestamp + filename
+animate out*.fit anim\m20 --png
 ```
 
 ---

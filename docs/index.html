@@ -97,6 +97,7 @@
                     <li><a href="#lrgb">lrgb.py</a></li>
                     <li><a href="#rgbbalance">rgbbalance.py</a></li>
                     <li><a href="#rgb">rgb.py</a></li>
+                    <li><a href="#animate">animate.py</a></li>
                 </ul>
             </div>
 
@@ -171,6 +172,7 @@
                         <tr><td>fits2tiff.py</td><td>FITS → TIFF / JPEG / PNG конверсия (JPEG/PNG сохраняют FITS-заголовок в метаданных)</td></tr>
                         <tr><td>tiff2fits.py</td><td>TIFF → FITS с восстановлением заголовка</td></tr>
                         <tr><td>absession.py</td><td>CSV генератор для AstroBin</td></tr>
+                        <tr><td>animate.py</td><td>Анимация последовательности кадров: видео (H.264/FFV1), 16-бит SER или серия PNG; стретч, кроп, подпись время+имя файла</td></tr>
                     </tbody>
                 </table>
             </section>
@@ -1305,6 +1307,26 @@ rgbbalance img0001.fit out0001.fit --rgb 1.1 2.0 0.5</code></pre>
                     <pre><code>rgb --merge r.fit g.fit b.fit --out rgb.fit
 rgb --merge r0001.fit g0001.fit b0001.fit --out rgb0001.fit
 rgb --split rgb.fit --out r.fit g.fit b.fit</code></pre>
+                </div>
+            </section>
+
+            <section id="animate">
+                <div class="script-card">
+                    <h3>animate.py <span class="badge">анимация</span></h3>
+                    <p>Сборка анимации из последовательности FITS-кадров: видео (H.264/FFV1), 16-битный SER или серия PNG. Для публикации анимаций астрообъектов/комет и блинк-просмотра транзиентов. Кадры сортируются по DATE-OBS, одинаково растягиваются (чёрная/белая точки по ненулевым пикселям, MTF по медиане) и собираются; в угол впечатывается время + имя исходного файла (убирается флагом <code>--nostamp</code>).</p>
+
+                    <div class="syntax">
+                        <h4>Синтаксис</h4>
+                        <code>animate input_spec output [--quality lossless|youtube|uncompressed] [--fps N] [--median T] [--black P | --autoblack [N]] [--white P] [--loop N] [--boomerang] [--label [utc|local]] [--nostamp] [--png] [--center W H | --width W --height H [--center X Y] | --top/--bottom/--left/--right N] [--sort date|name]</code>
+                    </div>
+
+                    <p>Формат вывода — по расширению: <code>.mp4</code>/<code>.mkv</code> — видео (через PyAV); <code>.ser</code> — несжатый 16-битный SER (mono/RGB, трейлер UTC-времени; для SER Player / PIPP / AutoStakkert); флаг <code>--png</code> — нумерованная серия PNG. Нулевые пиксели (поля выравнивания) игнорируются в статистике. Исходники только читаются; число кадров не ограничено.</p>
+
+                    <h4>Примеры</h4>
+                    <pre><code>animate out*.fit anim\m20.mp4 --quality youtube --fps 15
+animate frames\ anim\blink.mkv --fps 3 --boomerang
+animate out*.fit anim\m20.ser --center 2000 2000
+animate out*.fit anim\m20 --png</code></pre>
                 </div>
             </section>
 

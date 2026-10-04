@@ -97,12 +97,13 @@ validate_has_file_input(*specs)  # Ensure at least one arg is a file (not consta
 | stack.py | Optimal weighted stacking with sigma-fade clipping |
 | staralign.py | Star-based image registration (pentagon descriptors, TPS) |
 | cometalign.py | Comet-nucleus alignment of a star-aligned sequence (interactive mark of comet on first/last frame, then time-linear per-frame shift; pygame GUI, or --start/--stop headless) |
+| animate.py | Build an animation from a FITS sequence sorted by DATE-OBS: video (H.264/FFV1 via PyAV), 16-bit SER (lib/ser_writer.py), or a numbered PNG series; per-frame stretch (percentile or `--autoblack` median−N·MAD, zero/alignment-border pixels ignored), crop (center/size/margins), burned time+source-filename label |
 
 ## Dependencies
 
 - Python 3.6+
 - numpy, astropy, scipy
-- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O), sep (staralign, bestof, rgbbalance), diplib (backflat.py --median-mode fast), pygame (cometalign.py and backflat.py interactive GUI)
+- Optional: reproject (WCS work), astrometry.net (autosolve.py), Pillow (fits2tiff.py, autosolve.py JPEG I/O, animate.py --png), sep (staralign, bestof, rgbbalance), diplib (backflat.py --median-mode fast), pygame (cometalign.py and backflat.py interactive GUI), PyAV (animate.py video output; animate's SER output is dependency-free via lib/ser_writer.py)
 
 ## Running Tools
 
